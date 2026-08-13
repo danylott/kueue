@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	"github.com/go-logr/logr"
+	ctrlLog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	kueuev1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -39,8 +40,9 @@ func NewNumericLabelFilter(cfg kueuev1beta1.NumericLabelConstraint) CandidateSel
 }
 
 // Filter evaluates candidates against absolute bounds and relationship boundaries with the preemptor workload.
-func (f *numericLabelFilter) Filter(ctx context.Context, log logr.Logger, preemptor *workload.Info, candidates []*workload.Info) []*workload.Info {
+func (f *numericLabelFilter) Filter(ctx context.Context, preemptor *workload.Info, candidates []*workload.Info) []*workload.Info {
 	var filtered []*workload.Info
+	log := ctrlLog.FromContext(ctx)
 
 	var preemptorVal int32
 	if f.config.Relation != nil {

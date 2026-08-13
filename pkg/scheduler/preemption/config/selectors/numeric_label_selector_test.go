@@ -21,7 +21,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/go-logr/logr/testr"
 	"github.com/google/go-cmp/cmp"
 	"k8s.io/utils/ptr"
 
@@ -204,7 +203,7 @@ func TestNumericLabelFilter(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			filter := NewNumericLabelFilter(tc.config)
-			got := filter.Filter(context.Background(), testr.New(t), tc.preemptor, tc.candidates)
+			got := filter.Filter(context.Background(), tc.preemptor, tc.candidates)
 
 			var wantCandidates []*workload.Info
 			for _, c := range tc.candidates {

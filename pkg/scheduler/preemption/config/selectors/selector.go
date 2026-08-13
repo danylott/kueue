@@ -19,12 +19,11 @@ package selectors
 import (
 	"context"
 
-	"github.com/go-logr/logr"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 // CandidateSelector defines the interface for evaluating candidate workloads
 // against complex limits, quota, and topology labeling constraints.
 type CandidateSelector interface {
-	Filter(ctx context.Context, log logr.Logger, preemptor *workload.Info, candidates []*workload.Info) []*workload.Info
+	Filter(ctx context.Context, preemptor *workload.Info, candidates []*workload.Info) []*workload.Info
 }
