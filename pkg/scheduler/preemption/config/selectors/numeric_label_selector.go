@@ -23,17 +23,17 @@ import (
 	"github.com/go-logr/logr"
 	ctrlLog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	kueuev1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 type numericLabelFilter struct {
-	config kueuev1beta1.NumericLabelConstraint
+	config kueuev1beta2.NumericLabelConstraint
 }
 
 // NewNumericLabelFilter creates a highly reusable CandidateSelector to evaluate candidate workloads
 // based on customized integer labels.
-func NewNumericLabelFilter(cfg kueuev1beta1.NumericLabelConstraint) CandidateSelector {
+func NewNumericLabelFilter(cfg kueuev1beta2.NumericLabelConstraint) CandidateSelector {
 	return &numericLabelFilter{
 		config: cfg,
 	}
@@ -67,19 +67,19 @@ func (f *numericLabelFilter) Filter(ctx context.Context, preemptor *workload.Inf
 		}
 
 		switch *f.config.Relation {
-		case kueuev1beta1.LowerOrEqual:
+		case kueuev1beta2.LowerOrEqual:
 			if candidateVal <= preemptorVal {
 				filtered = append(filtered, candidate)
 			}
-		case kueuev1beta1.Greater:
+		case kueuev1beta2.Greater:
 			if candidateVal > preemptorVal {
 				filtered = append(filtered, candidate)
 			}
-		case kueuev1beta1.Lower:
+		case kueuev1beta2.Lower:
 			if candidateVal < preemptorVal {
 				filtered = append(filtered, candidate)
 			}
-		case kueuev1beta1.GreaterOrEquals:
+		case kueuev1beta2.GreaterOrEquals:
 			if candidateVal >= preemptorVal {
 				filtered = append(filtered, candidate)
 			}
