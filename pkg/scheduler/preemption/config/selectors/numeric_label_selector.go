@@ -17,11 +17,10 @@ limitations under the License.
 package selectors
 
 import (
-	"context"
 	"strconv"
 
 	"github.com/go-logr/logr"
-	ctrlLog "sigs.k8s.io/controller-runtime/pkg/log"
+	"k8s.io/klog/v2"
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -40,17 +39,32 @@ func NewNumericLabelFilter(cfg kueuev1beta2.NumericLabelConstraint) CandidateSel
 }
 
 // Filter evaluates candidates against absolute bounds and relationship boundaries with the preemptor workload.
-func (f *numericLabelFilter) Filter(ctx context.Context, preemptor *workload.Info, candidates []*workload.Info) []*workload.Info {
+func (f *numericLabelFilter) Filter(log logr.Logger, preemptor *workload.Info, candidates []*workload.Info) []*workload.Info {
 	var filtered []*workload.Info
-	log := ctrlLog.FromContext(ctx)
+
+	log = log.WithValues("key", f.config.Key)
+	if f.config.DefaultValue != nil {
+		log = log.WithValues("default", *f.config.DefaultValue)
+	}
 
 	var preemptorVal int32
 	if f.config.Relation != nil {
-		preemptorVal = getLabelValueOrDefault(log.WithValues("workload", preemptor.Obj.Name, "role", "preemptor"), preemptor, f.config.Key, f.config.DefaultValue)
+		preemptorLog := log.WithValues("preemptor", klog.KObj(preemptor.Obj))
+		pVal, ok := tryGetLabelValue(preemptorLog, preemptor, f.config.Key, f.config.DefaultValue)
+		if !ok {
+			// If preemptor has no valid label and no default is set, relation restrictions are inherently untestable.
+			preemptorLog.V(2).Info("Preemptor missing required numeric label for Relation evaluation. Failing closed; 0 candidates permitted.")
+			return filtered
+		}
+		preemptorVal = pVal
 	}
 
 	for _, candidate := range candidates {
-		candidateVal := getLabelValueOrDefault(log.WithValues("workload", candidate.Obj.Name, "role", "candidate"), candidate, f.config.Key, f.config.DefaultValue)
+		candidateVal, ok := tryGetLabelValue(log.WithValues("candidate", klog.KObj(candidate.Obj)), candidate, f.config.Key, f.config.DefaultValue)
+		if !ok {
+			// Exclude the candidate from preemption since it lacks the label & default
+			continue
+		}
 
 		// 1. Check absolute bounds (MinValue, MaxValue)
 		if f.config.MinValue != nil && candidateVal < *f.config.MinValue {
@@ -65,27 +79,7 @@ func (f *numericLabelFilter) Filter(ctx context.Context, preemptor *workload.Inf
 			filtered = append(filtered, candidate)
 			continue
 		}
-
-		switch *f.config.Relation {
-		case kueuev1beta2.LowerOrEqual:
-			if candidateVal <= preemptorVal {
-				filtered = append(filtered, candidate)
-			}
-		case kueuev1beta2.Greater:
-			if candidateVal > preemptorVal {
-				filtered = append(filtered, candidate)
-			}
-		case kueuev1beta2.Lower:
-			if candidateVal < preemptorVal {
-				filtered = append(filtered, candidate)
-			}
-		case kueuev1beta2.GreaterOrEquals:
-			if candidateVal >= preemptorVal {
-				filtered = append(filtered, candidate)
-			}
-		default:
-			// Fallback logic for unsupported or missing relations
-			log.V(3).Info("Unsupported or unhandled relation constraint evaluated", "relation", *f.config.Relation)
+		if matchesRelation(log, f.config.Relation, candidateVal, preemptorVal) {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -93,19 +87,50 @@ func (f *numericLabelFilter) Filter(ctx context.Context, preemptor *workload.Inf
 	return filtered
 }
 
-// getLabelValueOrDefault safely extracts a numeric int32 label from a workload.
-func getLabelValueOrDefault(log logr.Logger, wl *workload.Info, key string, def int32) int32 {
+// matchesRelation dynamically evaluates relation pointers between two workload bounds.
+func matchesRelation(log logr.Logger, rel *kueuev1beta2.RelativeConstraint, candidateVal, preemptorVal int32) bool {
+	if rel == nil {
+		return true // Default behavior when missing
+	}
+	switch *rel {
+	case kueuev1beta2.LowerOrEqual:
+		return candidateVal <= preemptorVal
+	case kueuev1beta2.Greater:
+		return candidateVal > preemptorVal
+	case kueuev1beta2.Lower:
+		return candidateVal < preemptorVal
+	case kueuev1beta2.GreaterOrEquals:
+		return candidateVal >= preemptorVal
+	default:
+		// Fallback logic for unsupported or missing relations
+		log.V(3).Info("Unsupported or unhandled relation constraint evaluated", "relation", *rel)
+		return true
+	}
+}
+
+// tryGetLabelValue safely extracts a numeric int32 label from a workload.
+// If the label is incorrectly formatted or missing, it evaluates the optionally configured default.
+func tryGetLabelValue(log logr.Logger, wl *workload.Info, key string, def *int32) (int32, bool) {
 	if wl == nil || wl.Obj.Labels == nil {
-		return def
+		if def != nil {
+			return *def, true
+		}
+		return 0, false
 	}
 	valStr, exists := wl.Obj.Labels[key]
 	if !exists {
-		return def
+		if def != nil {
+			return *def, true
+		}
+		return 0, false
 	}
 	val, err := strconv.ParseInt(valStr, 10, 32)
 	if err != nil {
-		log.V(3).Info("Failed to parse label into integer as expected; falling back to default", "key", key, "value", valStr, "default", def, "error", err)
-		return def
+		log.V(3).Info("Failed to parse label into integer as expected; falling back to default evaluation", "value", valStr, "error", err)
+		if def != nil {
+			return *def, true
+		}
+		return 0, false
 	}
-	return int32(val)
+	return int32(val), true
 }
