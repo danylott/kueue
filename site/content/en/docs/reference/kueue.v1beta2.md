@@ -3028,7 +3028,7 @@ re-queuing an evicted workload.</p>
 
 
 
-<p>RelativeConstraint defines how the preemptor compares to the candidate.
+<p>RelativeConstraint defines how a specified numeric property (e.g., a label value) of the preemptor compares to the candidate.
 Possible values are:</p>
 <ul>
 <li>&quot;Lower&quot;: permits preemption if candidate &lt; preemptor</li>

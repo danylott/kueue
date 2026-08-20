@@ -47,10 +47,11 @@ const (
 type NumericLabelConstraint struct {
 	// Key is the label key that stores the integer value.
 	Key string `json:"key"`
-	// DefaultValue is used when a workload does not possess the label key,
-	// or if the label value exists but cannot be parsed as an integer.
-	// If not specified, candidates missing the label are completely excluded from being preempted,
-	// and preemptors missing the label are completely blocked from preempting any candidates.
+	// DefaultValue is used when a workload does not have the label key
+	// or value under the key cannot be parsed as an integer.
+	// If not specified workloads without the label or
+	// with label value not parsable as int are treated as incomparable by relation (if specified),
+	// and therefore excluded from preemption candidates.
 	// +optional
 	DefaultValue *int32 `json:"defaultValue,omitempty"`
 	// Relation defines how the preemptor compares to the candidate.

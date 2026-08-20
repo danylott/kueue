@@ -40,7 +40,7 @@ func NewNumericLabelFilter(cfg kueuev1beta2.NumericLabelConstraint) CandidateSel
 
 // Filter evaluates candidates against absolute bounds and relationship boundaries with the preemptor workload.
 func (f *numericLabelFilter) Filter(log logr.Logger, preemptor *workload.Info, candidates []*workload.Info) []*workload.Info {
-	var filtered []*workload.Info
+	var matchingWorkloads []*workload.Info
 
 	log = log.WithValues("key", f.config.Key)
 	if f.config.DefaultValue != nil {
@@ -52,9 +52,9 @@ func (f *numericLabelFilter) Filter(log logr.Logger, preemptor *workload.Info, c
 		preemptorLog := log.WithValues("preemptor", klog.KObj(preemptor.Obj))
 		pVal, ok := tryGetLabelValue(preemptorLog, preemptor, f.config.Key, f.config.DefaultValue)
 		if !ok {
-			// If preemptor has no valid label and no default is set, relation restrictions are inherently untestable.
-			preemptorLog.V(2).Info("Preemptor missing required numeric label for Relation evaluation. Failing closed; 0 candidates permitted.")
-			return filtered
+			// If preemptor has no valid label and no default is set, relation restrictions are inherently uncomparable.
+			preemptorLog.V(2).Info("Preemptor missing required numeric label for Relation evaluation; 0 candidates permitted.")
+			return nil
 		}
 		preemptorVal = pVal
 	}
@@ -75,16 +75,12 @@ func (f *numericLabelFilter) Filter(log logr.Logger, preemptor *workload.Info, c
 		}
 
 		// 2. Check relation constraint compared to preemptor
-		if f.config.Relation == nil {
-			filtered = append(filtered, candidate)
-			continue
-		}
-		if matchesRelation(log, f.config.Relation, candidateVal, preemptorVal) {
-			filtered = append(filtered, candidate)
+		if f.config.Relation == nil || matchesRelation(log, f.config.Relation, candidateVal, preemptorVal) {
+			matchingWorkloads = append(matchingWorkloads, candidate)
 		}
 	}
 
-	return filtered
+	return matchingWorkloads
 }
 
 // matchesRelation dynamically evaluates relation pointers between two workload bounds.

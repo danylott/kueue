@@ -103,9 +103,9 @@ func TestNumericLabelFilter(t *testing.T) {
 			candidates: []*workload.Info{
 				workload.NewInfo(utiltesting.MakeWorkload("c1", "").Labels(map[string]string{"other-key": "123"}).Obj()),
 				workload.NewInfo(utiltesting.MakeWorkload("c2", "").Labels(map[string]string{"size": "1"}).Obj()),
-				workload.NewInfo(utiltesting.MakeWorkload("c-ignored", "").Labels(map[string]string{"other-key": "123"}).Obj()), // Prove it doesn't arbitrarily select everything
+				workload.NewInfo(utiltesting.MakeWorkload("c3", "").Labels(map[string]string{"other-key": "1"}).Obj()),
 			},
-			wantNames: []string{"c1", "c-ignored"},
+			wantNames: []string{"c1", "c3"},
 		},
 		"candidate uses default value safely filtering candidates not satisfying relation": {
 			config: kueuev1beta2.NumericLabelConstraint{
@@ -136,11 +136,10 @@ func TestNumericLabelFilter(t *testing.T) {
 			config: kueuev1beta2.NumericLabelConstraint{
 				Key:      "size",
 				Relation: ptr.To(kueuev1beta2.LowerOrEqual),
-				MinValue: ptr.To[int32](4),
 			},
 			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Labels(map[string]string{"other-key": "123"}).Obj()),
 			candidates: []*workload.Info{
-				workload.NewInfo(utiltesting.MakeWorkload("c1", "").Labels(map[string]string{"size": "2"}).Obj()), // Rejected by MinValue
+				workload.NewInfo(utiltesting.MakeWorkload("c1", "").Labels(map[string]string{"size": "2"}).Obj()),
 				workload.NewInfo(utiltesting.MakeWorkload("c2", "").Labels(map[string]string{"size": "8"}).Obj()),
 			},
 			wantNames: []string{}, // neither candidate is permitted
@@ -160,10 +159,8 @@ func TestNumericLabelFilter(t *testing.T) {
 		},
 		"reject candidates below min value": {
 			config: kueuev1beta2.NumericLabelConstraint{
-				Key:          "size",
-				DefaultValue: ptr.To[int32](1),
-				Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
-				MinValue:     ptr.To[int32](4),
+				Key:      "size",
+				MinValue: ptr.To[int32](4),
 			},
 			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Labels(map[string]string{"size": "16"}).Obj()),
 			candidates: []*workload.Info{
@@ -174,10 +171,8 @@ func TestNumericLabelFilter(t *testing.T) {
 		},
 		"candidate directly at min value edge case is permitted": {
 			config: kueuev1beta2.NumericLabelConstraint{
-				Key:          "size",
-				DefaultValue: ptr.To[int32](1),
-				Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
-				MinValue:     ptr.To[int32](8), // MinValue exactly matches candidate!
+				Key:      "size",
+				MinValue: ptr.To[int32](8), // MinValue exactly matches candidate!
 			},
 			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Labels(map[string]string{"size": "16"}).Obj()),
 			candidates: []*workload.Info{
@@ -188,10 +183,8 @@ func TestNumericLabelFilter(t *testing.T) {
 		},
 		"candidate directly at max value edge case is permitted": {
 			config: kueuev1beta2.NumericLabelConstraint{
-				Key:          "size",
-				DefaultValue: ptr.To[int32](1),
-				Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
-				MaxValue:     ptr.To[int32](32), // MaxValue exactly matches candidate!
+				Key:      "size",
+				MaxValue: ptr.To[int32](32), // MaxValue exactly matches candidate!
 			},
 			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Labels(map[string]string{"size": "64"}).Obj()),
 			candidates: []*workload.Info{
@@ -202,10 +195,8 @@ func TestNumericLabelFilter(t *testing.T) {
 		},
 		"reject candidates above max value": {
 			config: kueuev1beta2.NumericLabelConstraint{
-				Key:          "size",
-				DefaultValue: ptr.To[int32](1),
-				Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
-				MaxValue:     ptr.To[int32](10),
+				Key:      "size",
+				MaxValue: ptr.To[int32](10),
 			},
 			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Labels(map[string]string{"size": "32"}).Obj()),
 			candidates: []*workload.Info{
@@ -252,6 +243,26 @@ func TestNumericLabelFilter(t *testing.T) {
 				workload.NewInfo(utiltesting.MakeWorkload("c2", "").Labels(map[string]string{"size": "8"}).Obj()),
 			},
 			wantNames: []string{"c2"},
+		},
+		"complex scenario combining bounds, relations, defaults, and distraction labels": {
+			config: kueuev1beta2.NumericLabelConstraint{
+				Key:          "size",
+				DefaultValue: ptr.To[int32](4),
+				Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
+				MinValue:     ptr.To[int32](2),
+				MaxValue:     ptr.To[int32](16),
+			},
+			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Labels(map[string]string{"size": "8"}).Obj()),
+			candidates: []*workload.Info{
+				workload.NewInfo(utiltesting.MakeWorkload("c1", "").Labels(map[string]string{"size": "1"}).Obj()),        // Rejected by MinValue
+				workload.NewInfo(utiltesting.MakeWorkload("c2", "").Labels(map[string]string{"size": "10"}).Obj()),       // Rejected by Relation (> 8)
+				workload.NewInfo(utiltesting.MakeWorkload("c3", "").Labels(map[string]string{"size": "24"}).Obj()),       // Rejected by MaxValue and Relation
+				workload.NewInfo(utiltesting.MakeWorkload("c4", "").Labels(map[string]string{"size": "4"}).Obj()),        // Survives (2 <= 4 <= 16 and 4 <= 8)
+				workload.NewInfo(utiltesting.MakeWorkload("c5", "").Labels(map[string]string{"other-key": "123"}).Obj()), // Survives (default 4 fits boundaries and relation)
+				workload.NewInfo(utiltesting.MakeWorkload("c6", "").Labels(map[string]string{"size": "invalid"}).Obj()),  // Survives (default 4 fits all rules)
+				workload.NewInfo(utiltesting.MakeWorkload("c7", "").Labels(map[string]string{"size": "8"}).Obj()),        // Survives (matches Preemptor exactly)
+			},
+			wantNames: []string{"c4", "c5", "c6", "c7"},
 		},
 	}
 
