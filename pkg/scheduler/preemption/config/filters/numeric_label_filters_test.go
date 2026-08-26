@@ -389,34 +389,7 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 			wantMatch: false,
 		},
 
-		// 5. Pure Label Key Checks (No relation, no bounds)
-		"No relation or bounds: candidate with valid label matches": {
-			constraint: kueuev1beta2.NumericLabelConstraint{
-				Key: "size",
-			},
-			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Obj()),
-			candidate: workload.NewInfo(utiltesting.MakeWorkload("c", "").Labels(map[string]string{"size": "8"}).Obj()),
-			wantMatch: true,
-		},
-		"No relation or bounds: candidate missing label without default rejected": {
-			constraint: kueuev1beta2.NumericLabelConstraint{
-				Key: "size",
-			},
-			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Obj()),
-			candidate: workload.NewInfo(utiltesting.MakeWorkload("c", "").Labels(map[string]string{"other": "123"}).Obj()),
-			wantMatch: false,
-		},
-		"No relation or bounds: candidate missing label with default matches": {
-			constraint: kueuev1beta2.NumericLabelConstraint{
-				Key:          "size",
-				DefaultValue: ptr.To[int32](8),
-			},
-			preemptor: workload.NewInfo(utiltesting.MakeWorkload("p", "").Obj()),
-			candidate: workload.NewInfo(utiltesting.MakeWorkload("c", "").Labels(map[string]string{"other": "123"}).Obj()),
-			wantMatch: true,
-		},
-
-		// 6. Non-standard & Edge Numbers (Negative numbers, parsing)
+		// 5. Non-standard & Edge Numbers (Negative numbers, parsing)
 		"Negative numeric values: candidate strictly lower matches": {
 			constraint: kueuev1beta2.NumericLabelConstraint{
 				Key:      "prio",
@@ -456,7 +429,7 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 			wantMatch: true,
 		},
 
-		// 7. Composite Constraints & Error Handling
+		// 6. Composite Constraints & Error Handling
 		"Unsupported relation constraint rejects": {
 			constraint: kueuev1beta2.NumericLabelConstraint{
 				Key:      "size",

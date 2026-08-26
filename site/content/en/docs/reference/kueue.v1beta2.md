@@ -3114,8 +3114,8 @@ Possible values are:</p>
 <ul>
 <li>&quot;SameLocalQueue&quot;: restricts preemption candidates to workloads submitted to the exact same LocalQueue (matching name and namespace).</li>
 <li>&quot;SameClusterQueue&quot;: restricts preemption candidates to workloads submitted to the same ClusterQueue as the preemptor.</li>
-<li>&quot;SameCohort&quot;: restricts preemption candidates to workloads in ClusterQueues that share the exact same immediate direct Cohort.</li>
-<li>&quot;SameCohortTree&quot;: restricts preemption candidates to workloads in ClusterQueues that belong to the same Cohort Tree (sharing the same root ancestor Cohort).</li>
+<li>&quot;SameCohort&quot;: restricts preemption candidates to workloads in ClusterQueues that share the exact same immediate direct Cohort, as well as workloads in the preemptor's own ClusterQueue (even if standalone).</li>
+<li>&quot;SameCohortTree&quot;: restricts preemption candidates to workloads in ClusterQueues that belong to the same Cohort Tree (sharing the same root ancestor Cohort), as well as workloads in the preemptor's own ClusterQueue (even if standalone).</li>
 <li>&quot;AnyClusterQueue&quot;: places no relationship restrictions on preemption candidates.</li>
 </ul>
 

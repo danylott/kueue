@@ -48,6 +48,8 @@ const (
 // other large topology workloads.
 // Please note that you should remember to append the designated label to the list of labels
 // copied to the workload via the Kueue main configuration.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.relation) || has(self.minValue) || has(self.maxValue)", message="at least one of relation, minValue, or maxValue must be specified"
 type NumericLabelConstraint struct {
 	// Key is the label key that stores the integer value.
 	Key string `json:"key"`

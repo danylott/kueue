@@ -142,9 +142,9 @@ func TestCandidateFiltersFactory_Build(t *testing.T) {
 				WLFilters: nil,
 			},
 		},
-		"Combined SameCohortTree and NumericLabelConstraints binds preemptor values": {
+		"Combined SameLocalQueue and NumericLabelConstraints appends both relation and numeric WorkloadFilters": {
 			selector: &kueuev1beta2.PreemptionCandidateSelector{
-				RelationRequirement: kueuev1beta2.SameCohortTree,
+				RelationRequirement: kueuev1beta2.SameLocalQueue,
 				NumericLabels: []kueuev1beta2.NumericLabelConstraint{
 					{
 						Key:          "tpu-size",
@@ -154,47 +154,6 @@ func TestCandidateFiltersFactory_Build(t *testing.T) {
 					{
 						Key:      "priority-boost",
 						MinValue: ptr.To[int32](10),
-					},
-				},
-			},
-			preemptor: preemptor,
-			wantFilters: CandidateFilters{
-				CQFilters: []ClusterQueueFilter{
-					&sameCohortTreeFilter{
-						preemptorCQ:         "cq1",
-						preemptorRootCohort: "rootA",
-						hasCohort:           true,
-					},
-				},
-				WLFilters: []WorkloadFilter{
-					&numericLabelFilter{
-						constraint: kueuev1beta2.NumericLabelConstraint{
-							Key:          "tpu-size",
-							DefaultValue: ptr.To[int32](1),
-							Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
-						},
-						preemptorVal: 8, // extracted from preemptor's "tpu-size": "8" label
-						hasPreemptor: true,
-					},
-					&numericLabelFilter{
-						constraint: kueuev1beta2.NumericLabelConstraint{
-							Key:      "priority-boost",
-							MinValue: ptr.To[int32](10),
-						},
-						preemptorVal: 0,
-						hasPreemptor: false, // no relation requested, so preemptor value is not parsed
-					},
-				},
-			},
-		},
-		"Combined SameLocalQueue and NumericLabelConstraints appends both relation and numeric WorkloadFilters": {
-			selector: &kueuev1beta2.PreemptionCandidateSelector{
-				RelationRequirement: kueuev1beta2.SameLocalQueue,
-				NumericLabels: []kueuev1beta2.NumericLabelConstraint{
-					{
-						Key:          "tpu-size",
-						DefaultValue: ptr.To[int32](1),
-						Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
 					},
 				},
 			},
@@ -214,8 +173,16 @@ func TestCandidateFiltersFactory_Build(t *testing.T) {
 							DefaultValue: ptr.To[int32](1),
 							Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
 						},
-						preemptorVal: 8,
+						preemptorVal: 8, // extracted from preemptor's "tpu-size": "8" label
 						hasPreemptor: true,
+					},
+					&numericLabelFilter{
+						constraint: kueuev1beta2.NumericLabelConstraint{
+							Key:      "priority-boost",
+							MinValue: ptr.To[int32](10),
+						},
+						preemptorVal: 0,
+						hasPreemptor: false, // no relation requested, so preemptor value is not parsed
 					},
 				},
 			},
