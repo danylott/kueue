@@ -126,24 +126,51 @@ type PreemptionRule struct {
 	Candidates []PreemptionCandidateSelector `json:"candidates,omitempty"`
 }
 
+// PreemptionRelationConstraint specifies the relational boundary between
+// the preempting workload's queue and candidate workloads' queues.
+// Possible values are:
+// - "SameLocalQueue": restricts preemption candidates to workloads submitted to the exact same LocalQueue (matching name and namespace).
+// - "SameClusterQueue": restricts preemption candidates to workloads submitted to the same ClusterQueue as the preemptor.
+// - "SameCohort": restricts preemption candidates to workloads in ClusterQueues that share the exact same immediate direct Cohort, as well as workloads in the preemptor's own ClusterQueue (even if standalone).
+// - "SameCohortTree": restricts preemption candidates to workloads in ClusterQueues that belong to the same Cohort Tree (sharing the same root ancestor Cohort), as well as workloads in the preemptor's own ClusterQueue (even if standalone).
+// - "AnyClusterQueue": places no relationship restrictions on preemption candidates.
+//
+// +kubebuilder:validation:Enum=SameLocalQueue;SameClusterQueue;SameCohort;SameCohortTree;AnyClusterQueue
 type PreemptionRelationConstraint string
 
 const (
-	SameLocalQueue   PreemptionRelationConstraint = "SameLocalQueue"
+	// SameLocalQueue restricts preemption candidates to workloads submitted
+	// to the exact same LocalQueue (matching name and namespace).
+	SameLocalQueue PreemptionRelationConstraint = "SameLocalQueue"
+
+	// SameClusterQueue restricts preemption candidates to workloads submitted
+	// to the same ClusterQueue as the preemptor.
 	SameClusterQueue PreemptionRelationConstraint = "SameClusterQueue"
-	SameCohort       PreemptionRelationConstraint = "SameCohort"
-	SameCohortTree   PreemptionRelationConstraint = "SameCohortTree"
-	AnyClusterQueue  PreemptionRelationConstraint = "AnyClusterQueue"
+
+	// SameCohort restricts preemption candidates to workloads in ClusterQueues
+	// that share the exact same immediate direct Cohort, as well as workloads in the
+	// preemptor's own ClusterQueue (even if standalone and lacking a parent cohort).
+	SameCohort PreemptionRelationConstraint = "SameCohort"
+
+	// SameCohortTree restricts preemption candidates to workloads in ClusterQueues
+	// that belong to the same Cohort Tree (sharing the same root ancestor Cohort),
+	// as well as workloads in the preemptor's own ClusterQueue (even if standalone and lacking a parent cohort).
+	SameCohortTree PreemptionRelationConstraint = "SameCohortTree"
+
+	// AnyClusterQueue places no relationship restrictions on preemption candidates.
+	AnyClusterQueue PreemptionRelationConstraint = "AnyClusterQueue"
 )
 
+// PreemptionCandidateSelector defines the selection criteria for workloads that are candidates for preemption.
 type PreemptionCandidateSelector struct {
-	// Required.
-	RelationRequirement PreemptionRelationConstraint `json:"relationRequirement,omitempty"`
+	// RelationRequirement specifies the queue or cohort relation boundary to the preemptor workload.
+	//
+	// +kubebuilder:validation:Required
+	RelationRequirement PreemptionRelationConstraint `json:"relationRequirement"`
 
-	// Accepts all if not set
-	// Filter candidate workloads using custom numeric labels from the workload
-	// resource.
-	// Multiple numeric labels are joined using AND-rule (all have to be satisfied).
+	// NumericLabels defines rules for filtering candidates using custom numeric labels on the Workload resource.
+	// Multiple numeric label constraints are joined using logical AND (all must be satisfied).
+	// +optional
 	NumericLabels []NumericLabelConstraint `json:"numericLabels,omitempty"`
 
 	// The comparison is made against the preempting workload.
