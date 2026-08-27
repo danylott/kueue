@@ -28,8 +28,8 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-func TestCandidateFiltersFactory_Build(t *testing.T) {
-	// Minimal snapshot required by factory for resolving preemptor's cohort ancestors:
+func TestNewCandidateFilters(t *testing.T) {
+	// Minimal snapshot required by constructor for resolving preemptor's cohort ancestors:
 	// rootA -> subA1 -> cq1
 	snapshot := buildTestSnapshot(
 		map[kueuev1beta2.ClusterQueueReference]kueuev1beta2.CohortReference{
@@ -43,8 +43,6 @@ func TestCandidateFiltersFactory_Build(t *testing.T) {
 
 	preemptor := makeWorkloadInfo("preemptor", "ns1", "lq1", "cq1")
 	preemptor.Obj.Labels = map[string]string{"tpu-size": "8"}
-
-	factory := NewCandidateFiltersFactory(snapshot)
 
 	cases := map[string]struct {
 		selector    *kueuev1beta2.PreemptionCandidateSelector
@@ -173,16 +171,14 @@ func TestCandidateFiltersFactory_Build(t *testing.T) {
 							DefaultValue: ptr.To[int32](1),
 							Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
 						},
-						preemptorVal: 8, // extracted from preemptor's "tpu-size": "8" label
-						hasPreemptor: true,
+						preemptorVal: ptr.To[int32](8), // extracted from preemptor's "tpu-size": "8" label
 					},
 					&numericLabelFilter{
 						constraint: kueuev1beta2.NumericLabelConstraint{
 							Key:      "priority-boost",
 							MinValue: ptr.To[int32](10),
 						},
-						preemptorVal: 0,
-						hasPreemptor: false, // no relation requested, so preemptor value is not parsed
+						preemptorVal: nil, // no relation requested, so preemptor value is not parsed
 					},
 				},
 			},
@@ -204,9 +200,9 @@ func TestCandidateFiltersFactory_Build(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := factory.Build(logr.Discard(), tc.selector, tc.preemptor)
+			got := NewCandidateFilters(logr.Discard(), tc.selector, tc.preemptor, snapshot)
 			if diff := cmp.Diff(tc.wantFilters, got, cmpOptions...); diff != "" {
-				t.Errorf("factory.Build() mismatch (-want +got):\n%s", diff)
+				t.Errorf("NewCandidateFilters() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

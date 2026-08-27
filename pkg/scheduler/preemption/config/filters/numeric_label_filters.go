@@ -21,6 +21,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -29,8 +30,7 @@ import (
 type numericLabelFilter struct {
 	log          logr.Logger
 	constraint   kueuev1beta2.NumericLabelConstraint
-	preemptorVal int32
-	hasPreemptor bool
+	preemptorVal *int32
 }
 
 // NewNumericLabelFilter creates a WorkloadFilter to evaluate candidate workloads
@@ -49,11 +49,9 @@ func NewNumericLabelFilter(log logr.Logger, constraint kueuev1beta2.NumericLabel
 	if constraint.Relation != nil {
 		preemptorLog := filterLog.WithValues("preemptor", klog.KObj(preemptor.Obj))
 		if val, ok := tryGetLabelValue(preemptorLog, preemptor, constraint.Key, constraint.DefaultValue); ok {
-			f.preemptorVal = val
-			f.hasPreemptor = true
+			f.preemptorVal = ptr.To(val)
 		} else {
-			// If preemptor has no valid label and no default is set, relation restrictions are uncomparable.
-			preemptorLog.V(2).Info("Preemptor missing required numeric label for Relation evaluation; 0 candidates permitted.")
+			preemptorLog.V(2).Info("Preemptor missing required numeric label without defaultValue; relational comparison will not match any candidates")
 		}
 	}
 
@@ -79,11 +77,11 @@ func (f *numericLabelFilter) Matches(wl *workload.Info) bool {
 
 	// 2. Check relation constraint compared to preemptor
 	if f.constraint.Relation != nil {
-		if !f.hasPreemptor {
+		if f.preemptorVal == nil {
 			// If preemptor has no valid label and no default is set, relation restrictions cannot be applied
 			return false
 		}
-		return matchesRelation(candLog, f.constraint.Relation, candVal, f.preemptorVal)
+		return matchesRelation(candLog, f.constraint.Relation, candVal, *f.preemptorVal)
 	}
 
 	return true
@@ -109,7 +107,7 @@ func tryGetLabelValue(log logr.Logger, wl *workload.Info, key string, def *int32
 
 	val, err := strconv.ParseInt(valStr, 10, 32)
 	if err != nil {
-		log.V(3).Info("Failed to parse label into integer as expected; falling back to default", "key", key, "value", valStr, "default", def, "error", err)
+		log.V(3).Info("Failed to parse label into integer as expected; falling back to default", "value", valStr, "error", err)
 		if def != nil {
 			return *def, true
 		}

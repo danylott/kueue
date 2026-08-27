@@ -44,6 +44,62 @@ func (m *mockWLFilter) Matches(wl *workload.Info) bool {
 	return wl != nil && wl.Obj != nil && m.allowedNames[wl.Obj.Name]
 }
 
+func TestCandidateFilters_MatchesCQ(t *testing.T) {
+	cq1 := &schdcache.ClusterQueueSnapshot{Name: "cq1"}
+	cq2 := &schdcache.ClusterQueueSnapshot{Name: "cq2"}
+
+	cases := map[string]struct {
+		filters   []ClusterQueueFilter
+		targetCQ  *schdcache.ClusterQueueSnapshot
+		wantMatch bool
+	}{
+		"empty CQFilters matches any ClusterQueue": {
+			filters:   nil,
+			targetCQ:  cq1,
+			wantMatch: true,
+		},
+		"single filter matching target CQ": {
+			filters: []ClusterQueueFilter{
+				&mockCQFilter{allowedNames: map[string]bool{"cq1": true}},
+			},
+			targetCQ:  cq1,
+			wantMatch: true,
+		},
+		"single filter rejecting target CQ": {
+			filters: []ClusterQueueFilter{
+				&mockCQFilter{allowedNames: map[string]bool{"cq1": true}},
+			},
+			targetCQ:  cq2,
+			wantMatch: false,
+		},
+		"multiple filters with all matching target CQ": {
+			filters: []ClusterQueueFilter{
+				&mockCQFilter{allowedNames: map[string]bool{"cq1": true, "cq2": true}},
+				&mockCQFilter{allowedNames: map[string]bool{"cq1": true}},
+			},
+			targetCQ:  cq1,
+			wantMatch: true,
+		},
+		"multiple filters with one rejecting target CQ": {
+			filters: []ClusterQueueFilter{
+				&mockCQFilter{allowedNames: map[string]bool{"cq1": true, "cq2": true}},
+				&mockCQFilter{allowedNames: map[string]bool{"cq2": true}},
+			},
+			targetCQ:  cq1,
+			wantMatch: false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cf := &CandidateFilters{CQFilters: tc.filters}
+			if got := cf.MatchesCQ(tc.targetCQ); got != tc.wantMatch {
+				t.Errorf("MatchesCQ() = %v, want %v", got, tc.wantMatch)
+			}
+		})
+	}
+}
+
 func TestCandidateFilters_FilterClusterQueues(t *testing.T) {
 	cq1 := &schdcache.ClusterQueueSnapshot{Name: "cq1"}
 	cq2 := &schdcache.ClusterQueueSnapshot{Name: "cq2"}
@@ -102,6 +158,62 @@ func TestCandidateFilters_FilterClusterQueues(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.wantNames, gotNames, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("FilterClusterQueues mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestCandidateFilters_MatchesWorkload(t *testing.T) {
+	wl1 := workload.NewInfo(utiltestingapi.MakeWorkload("wl1", "ns1").Obj())
+	wl2 := workload.NewInfo(utiltestingapi.MakeWorkload("wl2", "ns1").Obj())
+
+	cases := map[string]struct {
+		filters   []WorkloadFilter
+		targetWL  *workload.Info
+		wantMatch bool
+	}{
+		"empty WLFilters matches any workload": {
+			filters:   nil,
+			targetWL:  wl1,
+			wantMatch: true,
+		},
+		"single filter matching target workload": {
+			filters: []WorkloadFilter{
+				&mockWLFilter{allowedNames: map[string]bool{"wl1": true}},
+			},
+			targetWL:  wl1,
+			wantMatch: true,
+		},
+		"single filter rejecting target workload": {
+			filters: []WorkloadFilter{
+				&mockWLFilter{allowedNames: map[string]bool{"wl1": true}},
+			},
+			targetWL:  wl2,
+			wantMatch: false,
+		},
+		"multiple filters with all matching target workload": {
+			filters: []WorkloadFilter{
+				&mockWLFilter{allowedNames: map[string]bool{"wl1": true, "wl2": true}},
+				&mockWLFilter{allowedNames: map[string]bool{"wl1": true}},
+			},
+			targetWL:  wl1,
+			wantMatch: true,
+		},
+		"multiple filters with one rejecting target workload": {
+			filters: []WorkloadFilter{
+				&mockWLFilter{allowedNames: map[string]bool{"wl1": true, "wl2": true}},
+				&mockWLFilter{allowedNames: map[string]bool{"wl2": true}},
+			},
+			targetWL:  wl1,
+			wantMatch: false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cf := &CandidateFilters{WLFilters: tc.filters}
+			if got := cf.MatchesWorkload(tc.targetWL); got != tc.wantMatch {
+				t.Errorf("MatchesWorkload() = %v, want %v", got, tc.wantMatch)
 			}
 		})
 	}

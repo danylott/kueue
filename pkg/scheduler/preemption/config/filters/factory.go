@@ -24,28 +24,19 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// CandidateFiltersFactory compiles PreemptionCandidateSelector rules into 2-level CandidateFilters.
-type CandidateFiltersFactory struct {
-	snapshot *schdcache.Snapshot
-}
-
-// NewCandidateFiltersFactory creates a factory configured with the cluster state snapshot.
-func NewCandidateFiltersFactory(snapshot *schdcache.Snapshot) *CandidateFiltersFactory {
-	return &CandidateFiltersFactory{snapshot: snapshot}
-}
-
-// Build compiles a candidate selector into Level 1 (CQ) and Level 2 (Workload) filters.
-func (f *CandidateFiltersFactory) Build(
+// NewCandidateFilters compiles PreemptionCandidateSelector rules into CandidateFilters.
+func NewCandidateFilters(
 	log logr.Logger,
 	selector *kueuev1beta2.PreemptionCandidateSelector,
 	preemptor *workload.Info,
+	snapshot *schdcache.Snapshot,
 ) CandidateFilters {
 	if selector == nil {
 		return CandidateFilters{}
 	}
 
-	cqRelationFilters, wlRelationFilters := f.buildRelationFilters(log, selector.RelationRequirement, preemptor)
-	wlNumericFilters := f.buildNumericLabelFilters(log, selector.NumericLabels, preemptor)
+	cqRelationFilters, wlRelationFilters := buildRelationFilters(log, selector.RelationRequirement, preemptor, snapshot)
+	wlNumericFilters := buildNumericLabelFilters(log, selector.NumericLabels, preemptor)
 
 	return CandidateFilters{
 		CQFilters: cqRelationFilters,
@@ -53,15 +44,16 @@ func (f *CandidateFiltersFactory) Build(
 	}
 }
 
-func (f *CandidateFiltersFactory) buildRelationFilters(
+func buildRelationFilters(
 	log logr.Logger,
 	relation kueuev1beta2.PreemptionRelationConstraint,
 	preemptor *workload.Info,
+	snapshot *schdcache.Snapshot,
 ) ([]ClusterQueueFilter, []WorkloadFilter) {
 	switch relation {
 	case kueuev1beta2.SameLocalQueue:
-		// Level 1: Prune all other ClusterQueues
-		// Level 2: Match exact LocalQueue within the remaining ClusterQueue
+		// CQ Level: Prune all other ClusterQueues
+		// WL Level: Narrow down workloads to those matching exactly same LocalQueue
 		return []ClusterQueueFilter{NewSameClusterQueueFilter(preemptor.ClusterQueue)},
 			[]WorkloadFilter{NewSameLocalQueueFilter(preemptor.Obj.Namespace, preemptor.Obj.Spec.QueueName)}
 
@@ -69,10 +61,10 @@ func (f *CandidateFiltersFactory) buildRelationFilters(
 		return []ClusterQueueFilter{NewSameClusterQueueFilter(preemptor.ClusterQueue)}, nil
 
 	case kueuev1beta2.SameCohort:
-		return []ClusterQueueFilter{NewSameCohortFilter(preemptor.ClusterQueue, f.snapshot)}, nil
+		return []ClusterQueueFilter{NewSameCohortFilter(preemptor.ClusterQueue, snapshot)}, nil
 
 	case kueuev1beta2.SameCohortTree:
-		return []ClusterQueueFilter{NewSameCohortTreeFilter(preemptor.ClusterQueue, f.snapshot)}, nil
+		return []ClusterQueueFilter{NewSameCohortTreeFilter(preemptor.ClusterQueue, snapshot)}, nil
 
 	case kueuev1beta2.AnyClusterQueue:
 		return nil, nil
@@ -83,7 +75,7 @@ func (f *CandidateFiltersFactory) buildRelationFilters(
 	}
 }
 
-func (f *CandidateFiltersFactory) buildNumericLabelFilters(
+func buildNumericLabelFilters(
 	log logr.Logger,
 	labels []kueuev1beta2.NumericLabelConstraint,
 	preemptor *workload.Info,

@@ -22,55 +22,25 @@ import (
 )
 
 // ClusterQueueFilter evaluates whether a ClusterQueue is eligible to yield preemption candidates.
-// Level 1 filtering evaluates entire ClusterQueues to prune ineligible queues in O(1) operations,
-// preventing unnecessary iteration over all individual workloads within those queues.
+// ClusterQueue filtering evaluates entire ClusterQueues to prune ineligible queues,
+// making unnecessary iteration over all individual workloads within those queues avoidable.
 type ClusterQueueFilter interface {
 	Matches(cq *schdcache.ClusterQueueSnapshot) bool
 }
 
 // WorkloadFilter evaluates whether a specific candidate workload is eligible for preemption.
-// Level 2 filtering executes only on candidate workloads from ClusterQueues that passed Level 1.
 type WorkloadFilter interface {
 	Matches(wl *workload.Info) bool
 }
 
-// CandidateFilters contains the complete 2-level filter set compiled for a candidate selector.
+// CandidateFilters contains the complete filter set compiled for a candidate selector.
 type CandidateFilters struct {
 	CQFilters []ClusterQueueFilter
 	WLFilters []WorkloadFilter
 }
 
-// FilterClusterQueues applies all Level 1 CQFilters to a list of ClusterQueues.
-// If no CQFilters are configured, it returns the input slice directly with zero allocations.
-func (cf *CandidateFilters) FilterClusterQueues(cqs []*schdcache.ClusterQueueSnapshot) []*schdcache.ClusterQueueSnapshot {
-	if len(cf.CQFilters) == 0 {
-		return cqs
-	}
-	var matchingCQs []*schdcache.ClusterQueueSnapshot
-	for _, cq := range cqs {
-		if cf.matchesAllCQ(cq) {
-			matchingCQs = append(matchingCQs, cq)
-		}
-	}
-	return matchingCQs
-}
-
-// FilterWorkloads applies all Level 2 WLFilters to candidate workloads.
-// If no WLFilters are configured, it returns the input slice directly with zero allocations.
-func (cf *CandidateFilters) FilterWorkloads(candidates []*workload.Info) []*workload.Info {
-	if len(cf.WLFilters) == 0 {
-		return candidates
-	}
-	var matchingWorkloads []*workload.Info
-	for _, wl := range candidates {
-		if cf.matchesAllWL(wl) {
-			matchingWorkloads = append(matchingWorkloads, wl)
-		}
-	}
-	return matchingWorkloads
-}
-
-func (cf *CandidateFilters) matchesAllCQ(cq *schdcache.ClusterQueueSnapshot) bool {
+// MatchesCQ returns true if the given ClusterQueue passes all configured CQFilters.
+func (cf *CandidateFilters) MatchesCQ(cq *schdcache.ClusterQueueSnapshot) bool {
 	for _, f := range cf.CQFilters {
 		if !f.Matches(cq) {
 			return false
@@ -79,11 +49,42 @@ func (cf *CandidateFilters) matchesAllCQ(cq *schdcache.ClusterQueueSnapshot) boo
 	return true
 }
 
-func (cf *CandidateFilters) matchesAllWL(wl *workload.Info) bool {
+// FilterClusterQueues applies all CQFilters to a list of ClusterQueues.
+// If no CQFilters are configured, it returns the input slice directly with zero allocations.
+func (cf *CandidateFilters) FilterClusterQueues(cqs []*schdcache.ClusterQueueSnapshot) []*schdcache.ClusterQueueSnapshot {
+	if len(cf.CQFilters) == 0 {
+		return cqs
+	}
+	var matchingCQs []*schdcache.ClusterQueueSnapshot
+	for _, cq := range cqs {
+		if cf.MatchesCQ(cq) {
+			matchingCQs = append(matchingCQs, cq)
+		}
+	}
+	return matchingCQs
+}
+
+// MatchesWorkload returns true if the candidate workload passes all configured WLFilters.
+func (cf *CandidateFilters) MatchesWorkload(wl *workload.Info) bool {
 	for _, f := range cf.WLFilters {
 		if !f.Matches(wl) {
 			return false
 		}
 	}
 	return true
+}
+
+// FilterWorkloads applies all WLFilters to candidate workloads.
+// If no WLFilters are configured, it returns the input slice directly with zero allocations.
+func (cf *CandidateFilters) FilterWorkloads(candidates []*workload.Info) []*workload.Info {
+	if len(cf.WLFilters) == 0 {
+		return candidates
+	}
+	var matchingWorkloads []*workload.Info
+	for _, wl := range candidates {
+		if cf.MatchesWorkload(wl) {
+			matchingWorkloads = append(matchingWorkloads, wl)
+		}
+	}
+	return matchingWorkloads
 }

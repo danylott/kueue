@@ -96,7 +96,7 @@ func (f *sameCohortTreeFilter) Matches(cq *schdcache.ClusterQueueSnapshot) bool 
 	return root != nil && root.GetName() == f.preemptorRootCohort
 }
 
-// sameLocalQueueFilter is a Level 2 WorkloadFilter matching workloads in the exact same Namespace and LocalQueue.
+// sameLocalQueueFilter is a WorkloadFilter matching workloads in the exact same Namespace and LocalQueue.
 // Precondition: Applied only after sameClusterQueueFilter has ensured all candidates share the same ClusterQueue.
 type sameLocalQueueFilter struct {
 	namespace string
