@@ -34,11 +34,6 @@ type PreemptionCandidateSelectorApplyConfiguration struct {
 	// If not set does not add any additional candidate filtering.
 	NumericLabels []NumericLabelConstraintApplyConfiguration `json:"numericLabels,omitempty"`
 	// RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
-	// Possible values are:
-	// - "Lower": permits preemption if candidate priority < preemptor priority
-	// - "Greater": permits preemption if candidate priority > preemptor priority
-	// - "LowerOrEqual": permits preemption if candidate priority <= preemptor priority
-	// - "GreaterOrEqual": permits preemption if candidate priority >= preemptor priority
 	// The comparison is made using effective priority (accounting for priority boost if enabled).
 	// If nil, no relative priority check is enforced.
 	RelativeWorkloadPriority *kueuev1beta2.RelativeConstraint `json:"relativeWorkloadPriority,omitempty"`

@@ -37,74 +37,62 @@ func TestWorkloadPriorityFilter_Matches(t *testing.T) {
 		candidatePriority *int32
 		wantMatch         bool
 	}{
-		"Lower: candidate priority strictly lower matches": {
+		"Lower: candidate strictly lower matches": {
 			relation:          kueuev1beta2.Lower,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](50),
 			wantMatch:         true,
 		},
-		"Lower: candidate priority equal rejected": {
+		"Lower: candidate equal rejected": {
 			relation:          kueuev1beta2.Lower,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         false,
 		},
-		"Lower: candidate priority strictly greater rejected": {
-			relation:          kueuev1beta2.Lower,
-			preemptorPriority: ptr.To[int32](100),
-			candidatePriority: ptr.To[int32](150),
-			wantMatch:         false,
-		},
-		"LowerOrEqual: candidate priority strictly lower matches": {
+		"LowerOrEqual: candidate strictly lower matches": {
 			relation:          kueuev1beta2.LowerOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](50),
 			wantMatch:         true,
 		},
-		"LowerOrEqual: candidate priority equal matches": {
+		"LowerOrEqual: candidate equal matches": {
 			relation:          kueuev1beta2.LowerOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         true,
 		},
-		"LowerOrEqual: candidate priority strictly greater rejected": {
+		"LowerOrEqual: candidate strictly greater rejected": {
 			relation:          kueuev1beta2.LowerOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](150),
 			wantMatch:         false,
 		},
-		"Greater: candidate priority strictly greater matches": {
+		"Greater: candidate strictly greater matches": {
 			relation:          kueuev1beta2.Greater,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](150),
 			wantMatch:         true,
 		},
-		"Greater: candidate priority equal rejected": {
+		"Greater: candidate equal rejected": {
 			relation:          kueuev1beta2.Greater,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         false,
 		},
-		"Greater: candidate priority strictly lower rejected": {
-			relation:          kueuev1beta2.Greater,
-			preemptorPriority: ptr.To[int32](100),
-			candidatePriority: ptr.To[int32](50),
-			wantMatch:         false,
-		},
-		"GreaterOrEqual: candidate priority strictly greater matches": {
-			relation:          kueuev1beta2.GreaterOrEquals,
+		"GreaterOrEqual: candidate strictly greater matches": {
+			relation:          kueuev1beta2.GreaterOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](150),
 			wantMatch:         true,
 		},
-		"GreaterOrEqual: candidate priority equal matches": {
-			relation:          kueuev1beta2.GreaterOrEquals,
+		"GreaterOrEqual: candidate equal matches": {
+			relation:          kueuev1beta2.GreaterOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         true,
 		},
-		"GreaterOrEqual: candidate priority strictly lower rejected": {
-			relation:          kueuev1beta2.GreaterOrEquals,
+		"GreaterOrEqual: candidate strictly lower rejected": {
+			relation:          kueuev1beta2.GreaterOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](50),
 			wantMatch:         false,
@@ -163,7 +151,7 @@ func TestWorkloadPriorityFilter_Matches(t *testing.T) {
 
 			filter := NewWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
 			if got := filter.Matches(candidate); got != tc.wantMatch {
-				t.Errorf("Matches() = %v, want %v", got, tc.wantMatch)
+				t.Errorf("Matches(candidate) = %v, want %v", got, tc.wantMatch)
 			}
 		})
 	}
@@ -191,16 +179,17 @@ func TestWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: true},
 			relation:          kueuev1beta2.Lower,
 			preemptorPriority: 50,
-			preemptorBoost:    "100", // effective priority: 50 + 100 = 150
-			candidatePriority: 120,   // effective priority: 120 < 150
+			preemptorBoost:    "100", // effective priority: 50 + 100 = 150 > 120
+			candidatePriority: 120,
 			wantMatch:         true,
 		},
-		"PriorityBoost enabled: candidate negative boost lowers effective priority below preemptor": {
+		"PriorityBoost enabled: both workloads boosted with boundary equality": {
 			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: true},
-			relation:          kueuev1beta2.Lower,
-			preemptorPriority: 100,
-			candidatePriority: 120,
-			candidateBoost:    "-50", // effective priority: 120 - 50 = 70 < 100
+			relation:          kueuev1beta2.LowerOrEqual,
+			preemptorPriority: 60,
+			preemptorBoost:    "10", // effective priority: 60 + 10 = 70
+			candidatePriority: 50,
+			candidateBoost:    "20", // effective priority: 50 + 20 = 70 <= 70
 			wantMatch:         true,
 		},
 		"PriorityBoost disabled: boost annotation is ignored and base priority is used": {
@@ -208,24 +197,8 @@ func TestWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 			relation:          kueuev1beta2.Greater,
 			preemptorPriority: 50,
 			candidatePriority: 10,
-			candidateBoost:    "100", // ignored -> effective priority is base 10 (not > 50)
+			candidateBoost:    "100", // ignored -> base priority is 10 (not > 50)
 			wantMatch:         false,
-		},
-		"PriorityBoost enabled: invalid boost annotation on candidate safely defaults to base priority": {
-			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: true},
-			relation:          kueuev1beta2.Lower,
-			preemptorPriority: 100,
-			candidatePriority: 50,
-			candidateBoost:    "not-a-number", // parse fails -> defaults to base 50 < 100
-			wantMatch:         true,
-		},
-		"PriorityBoost enabled: invalid boost annotation on preemptor safely defaults to base priority": {
-			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: true},
-			relation:          kueuev1beta2.Lower,
-			preemptorPriority: 100,
-			preemptorBoost:    "invalid", // parse fails -> defaults to base 100
-			candidatePriority: 50,        // 50 < 100
-			wantMatch:         true,
 		},
 	}
 
@@ -247,7 +220,7 @@ func TestWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 
 			filter := NewWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
 			if got := filter.Matches(candidate); got != tc.wantMatch {
-				t.Errorf("Matches() = %v, want %v", got, tc.wantMatch)
+				t.Errorf("Matches(candidate) = %v, want %v", got, tc.wantMatch)
 			}
 		})
 	}

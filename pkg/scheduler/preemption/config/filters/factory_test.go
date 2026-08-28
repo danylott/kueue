@@ -181,7 +181,7 @@ func TestNewCandidateFilters(t *testing.T) {
 		},
 		"SameClusterQueue with RelativeWorkloadPriority compiles both CQ and WL priority filters": {
 			selector: &kueuev1beta2.PreemptionCandidateSelector{
-				RelationRequirement:     kueuev1beta2.SameClusterQueue,
+				RelationRequirement:      kueuev1beta2.SameClusterQueue,
 				RelativeWorkloadPriority: ptr.To(kueuev1beta2.Lower),
 			},
 			preemptor: preemptor,
@@ -197,7 +197,7 @@ func TestNewCandidateFilters(t *testing.T) {
 				},
 			},
 		},
-		"Combined SameLocalQueue, NumericLabels, and RelativeWorkloadPriority compiles all filters in order": {
+		"Combined SameLocalQueue, NumericLabels, and RelativeWorkloadPriority compiles all filters": {
 			selector: &kueuev1beta2.PreemptionCandidateSelector{
 				RelationRequirement: kueuev1beta2.SameLocalQueue,
 				NumericLabels: []kueuev1beta2.NumericLabelConstraint{

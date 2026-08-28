@@ -37,8 +37,8 @@ const (
 	Greater RelativeConstraint = "Greater"
 	// LowerOrEqual permits preemption if candidate <= preemptor
 	LowerOrEqual RelativeConstraint = "LowerOrEqual"
-	// GreaterOrEquals permits preemption if candidate >= preemptor
-	GreaterOrEquals RelativeConstraint = "GreaterOrEqual"
+	// GreaterOrEqual permits preemption if candidate >= preemptor
+	GreaterOrEqual RelativeConstraint = "GreaterOrEqual"
 )
 
 // NumericLabelConstraint describes the configurations for filtering a numerical label.
@@ -177,11 +177,6 @@ type PreemptionCandidateSelector struct {
 	NumericLabels []NumericLabelConstraint `json:"numericLabels,omitempty"`
 
 	// RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
-	// Possible values are:
-	// - "Lower": permits preemption if candidate priority < preemptor priority
-	// - "Greater": permits preemption if candidate priority > preemptor priority
-	// - "LowerOrEqual": permits preemption if candidate priority <= preemptor priority
-	// - "GreaterOrEqual": permits preemption if candidate priority >= preemptor priority
 	// The comparison is made using effective priority (accounting for priority boost if enabled).
 	// If nil, no relative priority check is enforced.
 	// +optional

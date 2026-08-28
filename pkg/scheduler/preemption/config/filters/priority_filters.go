@@ -38,7 +38,6 @@ func NewWorkloadPriorityFilter(log logr.Logger, relation kueuev1beta2.RelativeCo
 	filterLog := log.WithValues("relation", relation)
 	preemptorLog := filterLog.WithValues("preemptor", klog.KObj(preemptor.Obj))
 	preemptorPriority := priority.EffectivePriority(preemptorLog, preemptor.Obj)
-	preemptorLog.V(3).Info("Configured workload priority filter with preemptor effective priority", "preemptorPriority", preemptorPriority)
 
 	return &workloadPriorityFilter{
 		log:               filterLog,

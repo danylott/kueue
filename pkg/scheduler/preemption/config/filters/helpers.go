@@ -23,19 +23,19 @@ import (
 )
 
 // matchesRelation evaluates relation constraints between candidate and preemptor values.
-// Returns false if an unsupported relation constraint is encountered.
+// It returns true if rel is nil, and false if an unsupported relation constraint is encountered.
 func matchesRelation(log logr.Logger, rel *kueuev1beta2.RelativeConstraint, candidateVal, preemptorVal int64) bool {
 	if rel == nil {
 		return true // Default behavior when missing
 	}
 	switch *rel {
+	case kueuev1beta2.Lower:
+		return candidateVal < preemptorVal
 	case kueuev1beta2.LowerOrEqual:
 		return candidateVal <= preemptorVal
 	case kueuev1beta2.Greater:
 		return candidateVal > preemptorVal
-	case kueuev1beta2.Lower:
-		return candidateVal < preemptorVal
-	case kueuev1beta2.GreaterOrEquals:
+	case kueuev1beta2.GreaterOrEqual:
 		return candidateVal >= preemptorVal
 	default:
 		log.V(3).Info("Unsupported or unhandled relation constraint evaluated", "relation", *rel)

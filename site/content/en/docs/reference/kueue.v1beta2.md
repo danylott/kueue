@@ -2757,15 +2757,8 @@ If not set does not add any additional candidate filtering.</p>
 </td>
 <td>
    <p>RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
-Possible values are:</p>
-<ul>
-<li>&quot;Lower&quot;: permits preemption if candidate priority &lt; preemptor priority</li>
-<li>&quot;Greater&quot;: permits preemption if candidate priority &gt; preemptor priority</li>
-<li>&quot;LowerOrEqual&quot;: permits preemption if candidate priority &lt;= preemptor priority</li>
-<li>&quot;GreaterOrEqual&quot;: permits preemption if candidate priority &gt;= preemptor priority
 The comparison is made using effective priority (accounting for priority boost if enabled).
-If nil, no relative priority check is enforced.</li>
-</ul>
+If nil, no relative priority check is enforced.</p>
 </td>
 </tr>
 </tbody>
