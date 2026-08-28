@@ -2748,7 +2748,8 @@ result in failure during workload admission.</p>
 </td>
 <td>
    <p>NumericLabels defines rules for filtering candidates using custom numeric labels on the Workload resource.
-Multiple numeric label constraints are joined using logical AND (all must be satisfied).</p>
+Multiple numeric label constraints are joined using logical AND (all must be satisfied).
+Accepts all if not set</p>
 </td>
 </tr>
 <tr><td><code>relativeWorkloadPriority</code> <B>[Required]</B><br/>

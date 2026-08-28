@@ -172,6 +172,7 @@ type PreemptionCandidateSelector struct {
 
 	// NumericLabels defines rules for filtering candidates using custom numeric labels on the Workload resource.
 	// Multiple numeric label constraints are joined using logical AND (all must be satisfied).
+	// Accepts all if not set
 	// +optional
 	NumericLabels []NumericLabelConstraint `json:"numericLabels,omitempty"`
 

@@ -31,6 +31,7 @@ type PreemptionCandidateSelectorApplyConfiguration struct {
 	RelationRequirement *kueuev1beta2.PreemptionRelationConstraint `json:"relationRequirement,omitempty"`
 	// NumericLabels defines rules for filtering candidates using custom numeric labels on the Workload resource.
 	// Multiple numeric label constraints are joined using logical AND (all must be satisfied).
+	// Accepts all if not set
 	NumericLabels []NumericLabelConstraintApplyConfiguration `json:"numericLabels,omitempty"`
 	// The comparison is made against the preempting workload.
 	// Lower means that the candidate
