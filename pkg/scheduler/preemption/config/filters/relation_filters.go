@@ -97,7 +97,6 @@ func (f *sameCohortTreeFilter) Matches(cq *schdcache.ClusterQueueSnapshot) bool 
 }
 
 // sameLocalQueueFilter is a WorkloadFilter matching workloads in the exact same Namespace and LocalQueue.
-// Precondition: Applied only after sameClusterQueueFilter has ensured all candidates share the same ClusterQueue.
 type sameLocalQueueFilter struct {
 	namespace string
 	queueName kueuev1beta2.LocalQueueName

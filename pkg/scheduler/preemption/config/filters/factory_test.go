@@ -31,15 +31,11 @@ import (
 func TestNewCandidateFilters(t *testing.T) {
 	// Minimal snapshot required by constructor for resolving preemptor's cohort ancestors:
 	// rootA -> subA1 -> cq1
-	snapshot := buildTestSnapshot(
-		map[kueuev1beta2.ClusterQueueReference]kueuev1beta2.CohortReference{
-			"cq1": "subA1",
-		},
-		map[kueuev1beta2.CohortReference]kueuev1beta2.CohortReference{
-			"rootA": "",
-			"subA1": "rootA",
-		},
-	)
+	snapshot := newSnapshotBuilder().
+		Cohort("rootA", "").
+		Cohort("subA1", "rootA").
+		ClusterQueue("cq1", "subA1").
+		Build()
 
 	preemptor := makeWorkloadInfo("preemptor", "ns1", "lq1", "cq1")
 	preemptor.Obj.Labels = map[string]string{"tpu-size": "8"}

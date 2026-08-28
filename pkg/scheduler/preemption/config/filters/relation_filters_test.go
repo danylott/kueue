@@ -19,95 +19,46 @@ package filters
 import (
 	"testing"
 
-	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
-	"sigs.k8s.io/kueue/pkg/cache/hierarchy"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
-	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-func newTestCohortSnapshot(name kueuev1beta2.CohortReference) *schdcache.CohortSnapshot {
-	return &schdcache.CohortSnapshot{
-		Name:   name,
-		Cohort: hierarchy.NewCohort[*schdcache.ClusterQueueSnapshot, *schdcache.CohortSnapshot](),
-	}
-}
-
-func buildTestSnapshot(
-	cqs map[kueuev1beta2.ClusterQueueReference]kueuev1beta2.CohortReference,
-	cohorts map[kueuev1beta2.CohortReference]kueuev1beta2.CohortReference,
-) *schdcache.Snapshot {
-	mgr := hierarchy.NewManager(newTestCohortSnapshot)
-	for cohortName := range cohorts {
-		mgr.AddCohort(cohortName)
-	}
-	for cqName := range cqs {
-		mgr.AddClusterQueue(&schdcache.ClusterQueueSnapshot{
-			Name: cqName,
-		})
-	}
-	for cohortName, parentCohort := range cohorts {
-		if parentCohort != "" {
-			mgr.UpdateCohortEdge(cohortName, parentCohort)
-		}
-	}
-	for cqName, parentCohort := range cqs {
-		if parentCohort != "" {
-			mgr.UpdateClusterQueueEdge(cqName, parentCohort)
-		}
-	}
-	return &schdcache.Snapshot{
-		Manager: mgr,
-	}
-}
-
-func makeWorkloadInfo(name, namespace string, localQueue kueuev1beta2.LocalQueueName, clusterQueue kueuev1beta2.ClusterQueueReference) *workload.Info {
-	wl := utiltestingapi.MakeWorkload(name, namespace).Queue(localQueue).Obj()
-	info := workload.NewInfo(wl)
-	info.ClusterQueue = clusterQueue
-	return info
-}
-
 func TestClusterQueueRelationFilters(t *testing.T) {
 	// Hierarchy topology:
-	//           rootA (Root Cohort)                         rootB (Root Cohort)
-	//         /   |         \                                      |
-	// cqDirectRoot subA1      subA2                               subB
-	//            /  |   \      |                                   |
-	//         cq1  cq2  subSubA cq3                               cq4
-	//                     |
-	//                   cqDeep
+	//                 rootA (Root Cohort)                     rootB (Root Cohort)
+	//              /           |             \                          |
+	// cqDirectRootA          subA1          subA2                     subB
+	//                      /   |     \        |                         |
+	//              cq1SubA1 cq2SubA1 subSubA cq3SubA2                cq4SubB
+	//                                  |
+	//                            cqDeepSubSubA
 	//
 	// Standalone CQs (no cohort):
 	// - cqStandalone1
 	// - cqStandalone2
-	snapshot := buildTestSnapshot(
-		map[kueuev1beta2.ClusterQueueReference]kueuev1beta2.CohortReference{
-			"cq1":           "subA1",
-			"cq2":           "subA1",
-			"cqDeep":        "subSubA",
-			"cqDirectRoot":  "rootA",
-			"cq3":           "subA2",
-			"cq4":           "subB",
-			"cqStandalone1": "",
-			"cqStandalone2": "",
-		},
-		map[kueuev1beta2.CohortReference]kueuev1beta2.CohortReference{
-			"rootA":   "",
-			"subA1":   "rootA",
-			"subSubA": "subA1",
-			"subA2":   "rootA",
-			"rootB":   "",
-			"subB":    "rootB",
-		},
-	)
+	snapshot := newSnapshotBuilder().
+		Cohort("rootA", "").
+		Cohort("subA1", "rootA").
+		Cohort("subSubA", "subA1").
+		Cohort("subA2", "rootA").
+		Cohort("rootB", "").
+		Cohort("subB", "rootB").
+		ClusterQueue("cqDirectRootA", "rootA").
+		ClusterQueue("cq1SubA1", "subA1").
+		ClusterQueue("cq2SubA1", "subA1").
+		ClusterQueue("cqDeepSubSubA", "subSubA").
+		ClusterQueue("cq3SubA2", "subA2").
+		ClusterQueue("cq4SubB", "subB").
+		ClusterQueue("cqStandalone1", "").
+		ClusterQueue("cqStandalone2", "").
+		Build()
 
-	cq1 := snapshot.ClusterQueue("cq1")
-	cq2 := snapshot.ClusterQueue("cq2")
-	cqDeep := snapshot.ClusterQueue("cqDeep")
-	cqDirectRoot := snapshot.ClusterQueue("cqDirectRoot")
-	cq3 := snapshot.ClusterQueue("cq3")
-	cq4 := snapshot.ClusterQueue("cq4")
+	cq1SubA1 := snapshot.ClusterQueue("cq1SubA1")
+	cq2SubA1 := snapshot.ClusterQueue("cq2SubA1")
+	cqDeepSubSubA := snapshot.ClusterQueue("cqDeepSubSubA")
+	cqDirectRootA := snapshot.ClusterQueue("cqDirectRootA")
+	cq3SubA2 := snapshot.ClusterQueue("cq3SubA2")
+	cq4SubB := snapshot.ClusterQueue("cq4SubB")
 	cqStandalone1 := snapshot.ClusterQueue("cqStandalone1")
 	cqStandalone2 := snapshot.ClusterQueue("cqStandalone2")
 
@@ -118,18 +69,18 @@ func TestClusterQueueRelationFilters(t *testing.T) {
 	}{
 		// 1. SameClusterQueue Filter Tests
 		"SameClusterQueue: matching target CQ": {
-			filter:      NewSameClusterQueueFilter("cq1"),
-			candidateCQ: cq1,
+			filter:      NewSameClusterQueueFilter("cq1SubA1"),
+			candidateCQ: cq1SubA1,
 			wantMatch:   true,
 		},
 		"SameClusterQueue: different sibling CQ in same cohort rejected": {
-			filter:      NewSameClusterQueueFilter("cq1"),
-			candidateCQ: cq2,
+			filter:      NewSameClusterQueueFilter("cq1SubA1"),
+			candidateCQ: cq2SubA1,
 			wantMatch:   false,
 		},
 		"SameClusterQueue: different CQ in disjoint tree rejected": {
-			filter:      NewSameClusterQueueFilter("cq1"),
-			candidateCQ: cq4,
+			filter:      NewSameClusterQueueFilter("cq1SubA1"),
+			candidateCQ: cq4SubB,
 			wantMatch:   false,
 		},
 		"SameClusterQueue: standalone CQ matches itself": {
@@ -145,48 +96,48 @@ func TestClusterQueueRelationFilters(t *testing.T) {
 
 		// 2. SameCohort Filter Tests
 		"SameCohort: sibling CQ in same immediate parent cohort matches": {
-			filter:      NewSameCohortFilter("cq1", snapshot),
-			candidateCQ: cq2,
+			filter:      NewSameCohortFilter("cq1SubA1", snapshot),
+			candidateCQ: cq2SubA1,
 			wantMatch:   true,
 		},
 		"SameCohort: candidate in exact same CQ as preemptor matches": {
-			filter:      NewSameCohortFilter("cq1", snapshot),
-			candidateCQ: cq1,
+			filter:      NewSameCohortFilter("cq1SubA1", snapshot),
+			candidateCQ: cq1SubA1,
 			wantMatch:   true,
 		},
 		"SameCohort: sub-cohort child under same immediate parent rejected": {
-			filter:      NewSameCohortFilter("cq1", snapshot),
-			candidateCQ: cqDeep,
+			filter:      NewSameCohortFilter("cq1SubA1", snapshot),
+			candidateCQ: cqDeepSubSubA,
 			wantMatch:   false,
 		},
 		"SameCohort: sibling sub-cohort under same root rejected": {
-			filter:      NewSameCohortFilter("cq1", snapshot),
-			candidateCQ: cq3,
+			filter:      NewSameCohortFilter("cq1SubA1", snapshot),
+			candidateCQ: cq3SubA2,
 			wantMatch:   false,
 		},
 		"SameCohort: direct child of root cohort rejected when preemptor is in sub-cohort": {
-			filter:      NewSameCohortFilter("cq1", snapshot),
-			candidateCQ: cqDirectRoot,
+			filter:      NewSameCohortFilter("cq1SubA1", snapshot),
+			candidateCQ: cqDirectRootA,
 			wantMatch:   false,
 		},
 		"SameCohort: candidate in disjoint cohort tree rejected": {
-			filter:      NewSameCohortFilter("cq1", snapshot),
-			candidateCQ: cq4,
+			filter:      NewSameCohortFilter("cq1SubA1", snapshot),
+			candidateCQ: cq4SubB,
 			wantMatch:   false,
 		},
 		"SameCohort: standalone candidate rejected for preemptor with cohort": {
-			filter:      NewSameCohortFilter("cq1", snapshot),
+			filter:      NewSameCohortFilter("cq1SubA1", snapshot),
 			candidateCQ: cqStandalone1,
 			wantMatch:   false,
 		},
 		"SameCohort: preemptor directly under root matches itself": {
-			filter:      NewSameCohortFilter("cqDirectRoot", snapshot),
-			candidateCQ: cqDirectRoot,
+			filter:      NewSameCohortFilter("cqDirectRootA", snapshot),
+			candidateCQ: cqDirectRootA,
 			wantMatch:   true,
 		},
 		"SameCohort: preemptor directly under root rejects sub-cohort child": {
-			filter:      NewSameCohortFilter("cqDirectRoot", snapshot),
-			candidateCQ: cq1,
+			filter:      NewSameCohortFilter("cqDirectRootA", snapshot),
+			candidateCQ: cq1SubA1,
 			wantMatch:   false,
 		},
 		"SameCohort: standalone preemptor matches candidate in its own CQ": {
@@ -201,53 +152,53 @@ func TestClusterQueueRelationFilters(t *testing.T) {
 		},
 		"SameCohort: standalone preemptor rejects candidate in a cohort CQ": {
 			filter:      NewSameCohortFilter("cqStandalone1", snapshot),
-			candidateCQ: cq1,
+			candidateCQ: cq1SubA1,
 			wantMatch:   false,
 		},
 
 		// 3. SameCohortTree Filter Tests
 		"SameCohortTree: sibling CQ in same immediate cohort matches": {
-			filter:      NewSameCohortTreeFilter("cq1", snapshot),
-			candidateCQ: cq2,
+			filter:      NewSameCohortTreeFilter("cq1SubA1", snapshot),
+			candidateCQ: cq2SubA1,
 			wantMatch:   true,
 		},
 		"SameCohortTree: candidate in sibling sub-cohort sharing root matches": {
-			filter:      NewSameCohortTreeFilter("cq1", snapshot),
-			candidateCQ: cq3,
+			filter:      NewSameCohortTreeFilter("cq1SubA1", snapshot),
+			candidateCQ: cq3SubA2,
 			wantMatch:   true,
 		},
 		"SameCohortTree: candidate in 3-level deep sub-cohort sharing root matches": {
-			filter:      NewSameCohortTreeFilter("cq1", snapshot),
-			candidateCQ: cqDeep,
+			filter:      NewSameCohortTreeFilter("cq1SubA1", snapshot),
+			candidateCQ: cqDeepSubSubA,
 			wantMatch:   true,
 		},
 		"SameCohortTree: candidate directly under root cohort matches": {
-			filter:      NewSameCohortTreeFilter("cq1", snapshot),
-			candidateCQ: cqDirectRoot,
+			filter:      NewSameCohortTreeFilter("cq1SubA1", snapshot),
+			candidateCQ: cqDirectRootA,
 			wantMatch:   true,
 		},
 		"SameCohortTree: candidate in exact same CQ as preemptor matches": {
-			filter:      NewSameCohortTreeFilter("cq1", snapshot),
-			candidateCQ: cq1,
+			filter:      NewSameCohortTreeFilter("cq1SubA1", snapshot),
+			candidateCQ: cq1SubA1,
 			wantMatch:   true,
 		},
 		"SameCohortTree: candidate in disjoint cohort tree rejected": {
-			filter:      NewSameCohortTreeFilter("cq1", snapshot),
-			candidateCQ: cq4,
+			filter:      NewSameCohortTreeFilter("cq1SubA1", snapshot),
+			candidateCQ: cq4SubB,
 			wantMatch:   false,
 		},
 		"SameCohortTree: preemptor in rootB matches itself": {
-			filter:      NewSameCohortTreeFilter("cq4", snapshot),
-			candidateCQ: cq4,
+			filter:      NewSameCohortTreeFilter("cq4SubB", snapshot),
+			candidateCQ: cq4SubB,
 			wantMatch:   true,
 		},
 		"SameCohortTree: preemptor in rootB rejects candidate in rootA": {
-			filter:      NewSameCohortTreeFilter("cq4", snapshot),
-			candidateCQ: cq1,
+			filter:      NewSameCohortTreeFilter("cq4SubB", snapshot),
+			candidateCQ: cq1SubA1,
 			wantMatch:   false,
 		},
 		"SameCohortTree: standalone candidate rejected for preemptor with cohort tree": {
-			filter:      NewSameCohortTreeFilter("cq1", snapshot),
+			filter:      NewSameCohortTreeFilter("cq1SubA1", snapshot),
 			candidateCQ: cqStandalone1,
 			wantMatch:   false,
 		},
@@ -263,29 +214,29 @@ func TestClusterQueueRelationFilters(t *testing.T) {
 		},
 		"SameCohortTree: standalone preemptor rejects candidate in cohort tree": {
 			filter:      NewSameCohortTreeFilter("cqStandalone1", snapshot),
-			candidateCQ: cq1,
+			candidateCQ: cq1SubA1,
 			wantMatch:   false,
 		},
 
 		// 4. RejectAllCQFilter Tests
 		"RejectAllCQFilter: rejects candidate in cohort": {
 			filter:      NewRejectAllCQFilter(),
-			candidateCQ: cq1,
+			candidateCQ: cq1SubA1,
 			wantMatch:   false,
 		},
 		"RejectAllCQFilter: rejects candidate in disjoint cohort": {
 			filter:      NewRejectAllCQFilter(),
-			candidateCQ: cq4,
+			candidateCQ: cq4SubB,
 			wantMatch:   false,
 		},
 		"RejectAllCQFilter: rejects candidate in deep sub-cohort": {
 			filter:      NewRejectAllCQFilter(),
-			candidateCQ: cqDeep,
+			candidateCQ: cqDeepSubSubA,
 			wantMatch:   false,
 		},
 		"RejectAllCQFilter: rejects direct root candidate": {
 			filter:      NewRejectAllCQFilter(),
-			candidateCQ: cqDirectRoot,
+			candidateCQ: cqDirectRootA,
 			wantMatch:   false,
 		},
 		"RejectAllCQFilter: rejects standalone candidate": {
@@ -313,19 +264,19 @@ func TestSameLocalQueueFilter(t *testing.T) {
 		wantMatch bool
 	}{
 		"matching namespace and queue name": {
-			candidate: makeWorkloadInfo("c-exact", "ns1", "lq1", "cq1"),
+			candidate: makeWorkloadInfo("c-exact", "ns1", "lq1", "cq1SubA1"),
 			wantMatch: true,
 		},
 		"different local queue name rejected": {
-			candidate: makeWorkloadInfo("c-diff-lq", "ns1", "lq2", "cq1"),
+			candidate: makeWorkloadInfo("c-diff-lq", "ns1", "lq2", "cq1SubA1"),
 			wantMatch: false,
 		},
 		"different namespace rejected": {
-			candidate: makeWorkloadInfo("c-diff-ns", "ns2", "lq1", "cq1"),
+			candidate: makeWorkloadInfo("c-diff-ns", "ns2", "lq1", "cq1SubA1"),
 			wantMatch: false,
 		},
 		"different namespace and queue name rejected": {
-			candidate: makeWorkloadInfo("c-diff-both", "ns2", "lq2", "cq1"),
+			candidate: makeWorkloadInfo("c-diff-both", "ns2", "lq2", "cq1SubA1"),
 			wantMatch: false,
 		},
 	}
