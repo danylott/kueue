@@ -2752,14 +2752,20 @@ Multiple numeric label constraints are joined using logical AND (all must be sat
 If not set does not add any additional candidate filtering.</p>
 </td>
 </tr>
-<tr><td><code>relativeWorkloadPriority</code> <B>[Required]</B><br/>
+<tr><td><code>relativeWorkloadPriority</code><br/>
 <a href="#kueue-x-k8s-io-v1beta2-RelativeConstraint"><code>RelativeConstraint</code></a>
 </td>
 <td>
-   <p>The comparison is made against the preempting workload.
-Lower means that the candidate
-has lower priority than the preemptor and so on. No check is made
-if the field is nil.</p>
+   <p>RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
+Possible values are:</p>
+<ul>
+<li>&quot;Lower&quot;: permits preemption if candidate priority &lt; preemptor priority</li>
+<li>&quot;Greater&quot;: permits preemption if candidate priority &gt; preemptor priority</li>
+<li>&quot;LowerOrEqual&quot;: permits preemption if candidate priority &lt;= preemptor priority</li>
+<li>&quot;GreaterOrEqual&quot;: permits preemption if candidate priority &gt;= preemptor priority
+The comparison is made using effective priority (accounting for priority boost if enabled).
+If nil, no relative priority check is enforced.</li>
+</ul>
 </td>
 </tr>
 </tbody>

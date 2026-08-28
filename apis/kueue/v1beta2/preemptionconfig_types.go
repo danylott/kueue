@@ -176,10 +176,15 @@ type PreemptionCandidateSelector struct {
 	// +optional
 	NumericLabels []NumericLabelConstraint `json:"numericLabels,omitempty"`
 
-	// The comparison is made against the preempting workload.
-	// Lower means that the candidate
-	// has lower priority than the preemptor and so on. No check is made
-	// if the field is nil.
+	// RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
+	// Possible values are:
+	// - "Lower": permits preemption if candidate priority < preemptor priority
+	// - "Greater": permits preemption if candidate priority > preemptor priority
+	// - "LowerOrEqual": permits preemption if candidate priority <= preemptor priority
+	// - "GreaterOrEqual": permits preemption if candidate priority >= preemptor priority
+	// The comparison is made using effective priority (accounting for priority boost if enabled).
+	// If nil, no relative priority check is enforced.
+	// +optional
 	RelativeWorkloadPriority *RelativeConstraint `json:"relativeWorkloadPriority,omitempty"`
 }
 

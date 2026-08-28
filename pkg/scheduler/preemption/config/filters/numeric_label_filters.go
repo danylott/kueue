@@ -81,7 +81,7 @@ func (f *numericLabelFilter) Matches(wl *workload.Info) bool {
 			// If preemptor has no valid label and no default is set, relation restrictions cannot be applied
 			return false
 		}
-		return matchesRelation(candLog, f.constraint.Relation, candVal, *f.preemptorVal)
+		return matchesRelation(candLog, f.constraint.Relation, int64(candVal), int64(*f.preemptorVal))
 	}
 
 	return true
@@ -115,25 +115,4 @@ func tryGetLabelValue(log logr.Logger, wl *workload.Info, key string, def *int32
 	}
 
 	return int32(val), true
-}
-
-// matchesRelation dynamically evaluates relation pointers between two workload bounds.
-// Returns false if an unsupported relation constraint is encountered.
-func matchesRelation(log logr.Logger, rel *kueuev1beta2.RelativeConstraint, candidateVal, preemptorVal int32) bool {
-	if rel == nil {
-		return true // Default behavior when missing
-	}
-	switch *rel {
-	case kueuev1beta2.LowerOrEqual:
-		return candidateVal <= preemptorVal
-	case kueuev1beta2.Greater:
-		return candidateVal > preemptorVal
-	case kueuev1beta2.Lower:
-		return candidateVal < preemptorVal
-	case kueuev1beta2.GreaterOrEquals:
-		return candidateVal >= preemptorVal
-	default:
-		log.V(3).Info("Unsupported or unhandled relation constraint evaluated", "relation", *rel)
-		return false
-	}
 }
