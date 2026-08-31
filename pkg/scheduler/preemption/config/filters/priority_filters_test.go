@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-func TestWorkloadPriorityFilter_Matches(t *testing.T) {
+func TestRelativeWorkloadPriorityFilter_Matches(t *testing.T) {
 	cases := map[string]struct {
 		relation          kueuev1beta2.RelativeConstraint
 		preemptorPriority *int32
@@ -149,7 +149,7 @@ func TestWorkloadPriorityFilter_Matches(t *testing.T) {
 			}
 			candidate := workload.NewInfo(candBuilder.Obj())
 
-			filter := NewWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
+			filter := NewRelativeWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
 			if got := filter.Matches(candidate); got != tc.wantMatch {
 				t.Errorf("Matches(candidate) = %v, want %v", got, tc.wantMatch)
 			}
@@ -157,7 +157,7 @@ func TestWorkloadPriorityFilter_Matches(t *testing.T) {
 	}
 }
 
-func TestWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
+func TestRelativeWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 	cases := map[string]struct {
 		featureGates      map[featuregate.Feature]bool
 		relation          kueuev1beta2.RelativeConstraint
@@ -218,7 +218,7 @@ func TestWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 			}
 			candidate := workload.NewInfo(candBuilder.Obj())
 
-			filter := NewWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
+			filter := NewRelativeWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
 			if got := filter.Matches(candidate); got != tc.wantMatch {
 				t.Errorf("Matches(candidate) = %v, want %v", got, tc.wantMatch)
 			}

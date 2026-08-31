@@ -64,7 +64,7 @@ spec:
                             description: |-
                               NumericLabels defines rules for filtering candidates using custom numeric labels on the Workload resource.
                               Multiple numeric label constraints are joined using logical AND (all must be satisfied).
-                              Accepts all if not set
+                              If not set does not add any additional candidate filtering.
                             items:
                               description: |-
                                 NumericLabelConstraint describes the configurations for filtering a numerical label.
@@ -128,6 +128,7 @@ spec:
                           relativeWorkloadPriority:
                             description: |-
                               RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
+                              For example "Lower" means that only workloads with lower priority will be allowed as preemption candidates.
                               The comparison is made using effective priority (accounting for priority boost if enabled).
                               If nil, no relative priority check is enforced.
                             enum:

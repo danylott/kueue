@@ -190,7 +190,7 @@ func TestNewCandidateFilters(t *testing.T) {
 					&sameClusterQueueFilter{preemptorCQ: "cq1"},
 				},
 				WLFilters: []WorkloadFilter{
-					&workloadPriorityFilter{
+					&relativeWorkloadPriorityFilter{
 						relation:          kueuev1beta2.Lower,
 						preemptorPriority: 0, // default priority when not explicitly set on preemptor
 					},
@@ -227,7 +227,7 @@ func TestNewCandidateFilters(t *testing.T) {
 						},
 						preemptorVal: ptr.To[int32](8),
 					},
-					&workloadPriorityFilter{
+					&relativeWorkloadPriorityFilter{
 						relation:          kueuev1beta2.LowerOrEqual,
 						preemptorPriority: 0,
 					},
@@ -244,10 +244,10 @@ func TestNewCandidateFilters(t *testing.T) {
 			sameLocalQueueFilter{},
 			rejectAllCQFilter{},
 			numericLabelFilter{},
-			workloadPriorityFilter{},
+			relativeWorkloadPriorityFilter{},
 		),
 		cmpopts.IgnoreFields(numericLabelFilter{}, "log"),
-		cmpopts.IgnoreFields(workloadPriorityFilter{}, "log"),
+		cmpopts.IgnoreFields(relativeWorkloadPriorityFilter{}, "log"),
 		cmpopts.EquateEmpty(),
 	}
 

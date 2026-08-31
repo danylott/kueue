@@ -104,6 +104,6 @@ func buildPriorityFilters(
 	if relativePriority == nil {
 		return nil
 	}
-	return []WorkloadFilter{NewWorkloadPriorityFilter(log, *relativePriority, preemptor)}
+	return []WorkloadFilter{NewRelativeWorkloadPriorityFilter(log, *relativePriority, preemptor)}
 }
 
