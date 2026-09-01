@@ -22,19 +22,19 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/klog/v2"
 
-	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 type numericLabelFilter struct {
 	log          logr.Logger
-	constraint   kueuev1beta2.NumericLabelConstraint
+	constraint   kueue.NumericLabelConstraint
 	preemptorVal *int32
 }
 
 // NewNumericLabelFilter creates a WorkloadFilter to evaluate candidate workloads
 // based on customized integer labels and relationship boundaries with the preemptor workload.
-func NewNumericLabelFilter(log logr.Logger, constraint kueuev1beta2.NumericLabelConstraint, preemptor *workload.Info) WorkloadFilter {
+func NewNumericLabelFilter(log logr.Logger, constraint kueue.NumericLabelConstraint, preemptor *workload.Info) WorkloadFilter {
 	filterLog := log.WithValues("filter", "NumericLabels", "key", constraint.Key)
 	if constraint.DefaultValue != nil {
 		filterLog = filterLog.WithValues("default", *constraint.DefaultValue)

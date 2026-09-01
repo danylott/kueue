@@ -25,7 +25,7 @@ import (
 	"k8s.io/component-base/featuregate"
 	"k8s.io/utils/ptr"
 
-	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/util/priority"
@@ -33,7 +33,7 @@ import (
 )
 
 func mockPriorityClassResolver(classes map[string]map[string]string) priority.PriorityClassLabelResolver {
-	return func(ref *kueuev1beta2.PriorityClassRef) (map[string]string, bool) {
+	return func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
 		if ref == nil || classes == nil {
 			return nil, false
 		}
@@ -249,103 +249,103 @@ func TestCandidateWorkloadPriorityFilter_Matches(t *testing.T) {
 
 func TestRelativeWorkloadPriorityFilter_Matches(t *testing.T) {
 	cases := map[string]struct {
-		relation          kueuev1beta2.RelativeConstraint
+		relation          kueue.RelativeConstraint
 		preemptorPriority *int32
 		candidatePriority *int32
 		wantMatch         bool
 	}{
 		"Lower: candidate strictly lower matches": {
-			relation:          kueuev1beta2.Lower,
+			relation:          kueue.Lower,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](50),
 			wantMatch:         true,
 		},
 		"Lower: candidate equal rejected": {
-			relation:          kueuev1beta2.Lower,
+			relation:          kueue.Lower,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         false,
 		},
 		"LowerOrEqual: candidate strictly lower matches": {
-			relation:          kueuev1beta2.LowerOrEqual,
+			relation:          kueue.LowerOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](50),
 			wantMatch:         true,
 		},
 		"LowerOrEqual: candidate equal matches": {
-			relation:          kueuev1beta2.LowerOrEqual,
+			relation:          kueue.LowerOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         true,
 		},
 		"LowerOrEqual: candidate strictly greater rejected": {
-			relation:          kueuev1beta2.LowerOrEqual,
+			relation:          kueue.LowerOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](150),
 			wantMatch:         false,
 		},
 		"Greater: candidate strictly greater matches": {
-			relation:          kueuev1beta2.Greater,
+			relation:          kueue.Greater,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](150),
 			wantMatch:         true,
 		},
 		"Greater: candidate equal rejected": {
-			relation:          kueuev1beta2.Greater,
+			relation:          kueue.Greater,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         false,
 		},
 		"GreaterOrEqual: candidate strictly greater matches": {
-			relation:          kueuev1beta2.GreaterOrEqual,
+			relation:          kueue.GreaterOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](150),
 			wantMatch:         true,
 		},
 		"GreaterOrEqual: candidate equal matches": {
-			relation:          kueuev1beta2.GreaterOrEqual,
+			relation:          kueue.GreaterOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](100),
 			wantMatch:         true,
 		},
 		"GreaterOrEqual: candidate strictly lower rejected": {
-			relation:          kueuev1beta2.GreaterOrEqual,
+			relation:          kueue.GreaterOrEqual,
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](50),
 			wantMatch:         false,
 		},
 		"Default priority handling: nil preemptor priority defaults to 0 and matches strictly lower candidate": {
-			relation:          kueuev1beta2.Lower,
+			relation:          kueue.Lower,
 			preemptorPriority: nil,
 			candidatePriority: ptr.To[int32](-10),
 			wantMatch:         true,
 		},
 		"Default priority handling: nil candidate priority defaults to 0 and matches when equal": {
-			relation:          kueuev1beta2.LowerOrEqual,
+			relation:          kueue.LowerOrEqual,
 			preemptorPriority: ptr.To[int32](0),
 			candidatePriority: nil,
 			wantMatch:         true,
 		},
 		"Default priority handling: both nil priorities compare as equal (0 vs 0)": {
-			relation:          kueuev1beta2.LowerOrEqual,
+			relation:          kueue.LowerOrEqual,
 			preemptorPriority: nil,
 			candidatePriority: nil,
 			wantMatch:         true,
 		},
 		"Negative priorities: candidate -100 is Lower than preemptor -50": {
-			relation:          kueuev1beta2.Lower,
+			relation:          kueue.Lower,
 			preemptorPriority: ptr.To[int32](-50),
 			candidatePriority: ptr.To[int32](-100),
 			wantMatch:         true,
 		},
 		"Negative priorities: candidate -50 is Greater than preemptor -100": {
-			relation:          kueuev1beta2.Greater,
+			relation:          kueue.Greater,
 			preemptorPriority: ptr.To[int32](-100),
 			candidatePriority: ptr.To[int32](-50),
 			wantMatch:         true,
 		},
 		"Unknown/unsupported relation constraint rejects all candidates": {
-			relation:          kueuev1beta2.RelativeConstraint("InvalidRelation"),
+			relation:          kueue.RelativeConstraint("InvalidRelation"),
 			preemptorPriority: ptr.To[int32](100),
 			candidatePriority: ptr.To[int32](50),
 			wantMatch:         false,
@@ -377,7 +377,7 @@ func TestRelativeWorkloadPriorityFilter_Matches(t *testing.T) {
 func TestRelativeWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 	cases := map[string]struct {
 		featureGates      map[featuregate.Feature]bool
-		relation          kueuev1beta2.RelativeConstraint
+		relation          kueue.RelativeConstraint
 		preemptorPriority int32
 		preemptorBoost    string
 		candidatePriority int32
@@ -386,7 +386,7 @@ func TestRelativeWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 	}{
 		"PriorityBoost enabled: candidate boost raises effective priority above preemptor": {
 			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: true},
-			relation:          kueuev1beta2.Greater,
+			relation:          kueue.Greater,
 			preemptorPriority: 50,
 			candidatePriority: 10,
 			candidateBoost:    "100", // effective priority: 10 + 100 = 110 > 50
@@ -394,7 +394,7 @@ func TestRelativeWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 		},
 		"PriorityBoost enabled: preemptor boost raises effective priority above candidate": {
 			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: true},
-			relation:          kueuev1beta2.Lower,
+			relation:          kueue.Lower,
 			preemptorPriority: 50,
 			preemptorBoost:    "100", // effective priority: 50 + 100 = 150 > 120
 			candidatePriority: 120,
@@ -402,7 +402,7 @@ func TestRelativeWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 		},
 		"PriorityBoost enabled: both workloads boosted with boundary equality": {
 			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: true},
-			relation:          kueuev1beta2.LowerOrEqual,
+			relation:          kueue.LowerOrEqual,
 			preemptorPriority: 60,
 			preemptorBoost:    "10", // effective priority: 60 + 10 = 70
 			candidatePriority: 50,
@@ -411,7 +411,7 @@ func TestRelativeWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 		},
 		"PriorityBoost disabled: boost annotation is ignored and base priority is used": {
 			featureGates:      map[featuregate.Feature]bool{features.PriorityBoost: false},
-			relation:          kueuev1beta2.Greater,
+			relation:          kueue.Greater,
 			preemptorPriority: 50,
 			candidatePriority: 10,
 			candidateBoost:    "100", // ignored -> base priority is 10 (not > 50)

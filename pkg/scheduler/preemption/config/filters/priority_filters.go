@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 
-	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/util/priority"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
@@ -88,7 +88,7 @@ func (f *candidateWorkloadPriorityFilter) Matches(wl *workload.Info) bool {
 func matchPriorityClassLabels(
 	log logr.Logger,
 	sel labels.Selector,
-	ref *kueuev1beta2.PriorityClassRef,
+	ref *kueue.PriorityClassRef,
 	resolver priority.PriorityClassLabelResolver,
 ) bool {
 	if sel == nil || sel.Empty() {
@@ -107,14 +107,14 @@ func matchPriorityClassLabels(
 
 type relativeWorkloadPriorityFilter struct {
 	log               logr.Logger
-	relation          kueuev1beta2.RelativeConstraint
+	relation          kueue.RelativeConstraint
 	preemptorPriority int64
 }
 
 // NewRelativeWorkloadPriorityFilter creates a WorkloadFilter to evaluate candidate workloads
 // based on relative workload priority compared against the preemptor workload.
 // The effective priority (accounting for priority boost if configured) is used for comparison.
-func NewRelativeWorkloadPriorityFilter(log logr.Logger, relation kueuev1beta2.RelativeConstraint, preemptor *workload.Info) WorkloadFilter {
+func NewRelativeWorkloadPriorityFilter(log logr.Logger, relation kueue.RelativeConstraint, preemptor *workload.Info) WorkloadFilter {
 	filterLog := log.WithValues("filter", "RelativeWorkloadPriority", "relation", relation)
 	preemptorLog := filterLog.WithValues("preemptor", klog.KObj(preemptor.Obj))
 	preemptorPriority := priority.EffectivePriority(preemptorLog, preemptor.Obj)

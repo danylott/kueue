@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/clock"
 
-	"sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	"sigs.k8s.io/kueue/pkg/resources"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/classical"
@@ -40,14 +40,14 @@ import (
 type preemptionEvaluator struct {
 	log        logr.Logger
 	clock      clock.Clock
-	config     v1beta2.PreemptionConfig
+	config     kueue.PreemptionConfig
 	pcResolver priority.PriorityClassLabelResolver
 }
 
 func NewPreemptionEvaluator(
 	log logr.Logger,
 	clock clock.Clock,
-	config v1beta2.PreemptionConfig,
+	config kueue.PreemptionConfig,
 	pcResolver priority.PriorityClassLabelResolver,
 ) *preemptionEvaluator {
 	return &preemptionEvaluator{
@@ -138,7 +138,7 @@ func matchesWorkload(filter *filters.CandidateFilters, wl *workload.Info) bool {
 	return true
 }
 
-func (p *preemptionEvaluator) isActiveTrigger(rule v1beta2.PreemptionRule, wlInfo *workload.Info) (bool, error) {
+func (p *preemptionEvaluator) isActiveTrigger(rule kueue.PreemptionRule, wlInfo *workload.Info) (bool, error) {
 	condition := meta.FindStatusCondition(wlInfo.Obj.Status.Conditions, string(rule.Trigger))
 	if condition == nil || condition.Status == metav1.ConditionFalse {
 		return false, nil

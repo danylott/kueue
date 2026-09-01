@@ -17,7 +17,7 @@ limitations under the License.
 package filters
 
 import (
-	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/cache/hierarchy"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
@@ -30,7 +30,7 @@ type snapshotBuilder struct {
 
 func newSnapshotBuilder() *snapshotBuilder {
 	return &snapshotBuilder{
-		mgr: hierarchy.NewManager(func(name kueuev1beta2.CohortReference) *schdcache.CohortSnapshot {
+		mgr: hierarchy.NewManager(func(name kueue.CohortReference) *schdcache.CohortSnapshot {
 			return &schdcache.CohortSnapshot{
 				Name:   name,
 				Cohort: hierarchy.NewCohort[*schdcache.ClusterQueueSnapshot, *schdcache.CohortSnapshot](),
@@ -39,7 +39,7 @@ func newSnapshotBuilder() *snapshotBuilder {
 	}
 }
 
-func (b *snapshotBuilder) Cohort(name, parent kueuev1beta2.CohortReference) *snapshotBuilder {
+func (b *snapshotBuilder) Cohort(name, parent kueue.CohortReference) *snapshotBuilder {
 	b.mgr.AddCohort(name)
 	if parent != "" {
 		b.mgr.UpdateCohortEdge(name, parent)
@@ -47,7 +47,7 @@ func (b *snapshotBuilder) Cohort(name, parent kueuev1beta2.CohortReference) *sna
 	return b
 }
 
-func (b *snapshotBuilder) ClusterQueue(name kueuev1beta2.ClusterQueueReference, parent kueuev1beta2.CohortReference) *snapshotBuilder {
+func (b *snapshotBuilder) ClusterQueue(name kueue.ClusterQueueReference, parent kueue.CohortReference) *snapshotBuilder {
 	b.mgr.AddClusterQueue(&schdcache.ClusterQueueSnapshot{Name: name})
 	if parent != "" {
 		b.mgr.UpdateClusterQueueEdge(name, parent)
@@ -63,7 +63,7 @@ func (b *snapshotBuilder) Build() *schdcache.Snapshot {
 
 type WorkloadInfoWrapper struct {
 	*utiltestingapi.WorkloadWrapper
-	clusterQueue kueuev1beta2.ClusterQueueReference
+	clusterQueue kueue.ClusterQueueReference
 }
 
 func MakeWorkloadInfo(name, namespace string) *WorkloadInfoWrapper {
@@ -72,12 +72,12 @@ func MakeWorkloadInfo(name, namespace string) *WorkloadInfoWrapper {
 	}
 }
 
-func (w *WorkloadInfoWrapper) ClusterQueue(cq kueuev1beta2.ClusterQueueReference) *WorkloadInfoWrapper {
+func (w *WorkloadInfoWrapper) ClusterQueue(cq kueue.ClusterQueueReference) *WorkloadInfoWrapper {
 	w.clusterQueue = cq
 	return w
 }
 
-func (w *WorkloadInfoWrapper) Queue(q kueuev1beta2.LocalQueueName) *WorkloadInfoWrapper {
+func (w *WorkloadInfoWrapper) Queue(q kueue.LocalQueueName) *WorkloadInfoWrapper {
 	w.WorkloadWrapper.Queue(q)
 	return w
 }
@@ -107,7 +107,7 @@ func (w *WorkloadInfoWrapper) Priority(p int32) *WorkloadInfoWrapper {
 	return w
 }
 
-func (w *WorkloadInfoWrapper) PriorityClassRef(ref *kueuev1beta2.PriorityClassRef) *WorkloadInfoWrapper {
+func (w *WorkloadInfoWrapper) PriorityClassRef(ref *kueue.PriorityClassRef) *WorkloadInfoWrapper {
 	w.WorkloadWrapper.PriorityClassRef(ref)
 	return w
 }

@@ -20,7 +20,7 @@ import (
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	"sigs.k8s.io/kueue/pkg/util/priority"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -29,7 +29,7 @@ import (
 // NewCandidateFilters compiles PreemptionCandidateSelector rules into CandidateFilters.
 func NewCandidateFilters(
 	log logr.Logger,
-	selector *kueuev1beta2.PreemptionCandidateSelector,
+	selector *kueue.PreemptionCandidateSelector,
 	preemptor *workload.Info,
 	snapshot *schdcache.Snapshot,
 	pcResolver priority.PriorityClassLabelResolver,
@@ -60,27 +60,27 @@ func NewCandidateFilters(
 
 func buildRelationFilters(
 	log logr.Logger,
-	relation kueuev1beta2.PreemptionRelationConstraint,
+	relation kueue.PreemptionRelationConstraint,
 	preemptor *workload.Info,
 	snapshot *schdcache.Snapshot,
 ) ([]ClusterQueueFilter, []WorkloadFilter) {
 	switch relation {
-	case kueuev1beta2.SameLocalQueue:
+	case kueue.SameLocalQueue:
 		// CQ Level: Prune all other ClusterQueues
 		// WL Level: Narrow down workloads to those matching exactly same LocalQueue
 		return []ClusterQueueFilter{NewSameClusterQueueFilter(preemptor.ClusterQueue)},
 			[]WorkloadFilter{NewSameLocalQueueFilter(preemptor.Obj.Namespace, preemptor.Obj.Spec.QueueName)}
 
-	case kueuev1beta2.SameClusterQueue:
+	case kueue.SameClusterQueue:
 		return []ClusterQueueFilter{NewSameClusterQueueFilter(preemptor.ClusterQueue)}, nil
 
-	case kueuev1beta2.SameCohort:
+	case kueue.SameCohort:
 		return []ClusterQueueFilter{NewSameCohortFilter(preemptor.ClusterQueue, snapshot)}, nil
 
-	case kueuev1beta2.SameCohortTree:
+	case kueue.SameCohortTree:
 		return []ClusterQueueFilter{NewSameCohortTreeFilter(preemptor.ClusterQueue, snapshot)}, nil
 
-	case kueuev1beta2.AnyClusterQueue:
+	case kueue.AnyClusterQueue:
 		return nil, nil
 
 	default:
@@ -91,7 +91,7 @@ func buildRelationFilters(
 
 func buildNumericLabelFilters(
 	log logr.Logger,
-	labels []kueuev1beta2.NumericLabelConstraint,
+	labels []kueue.NumericLabelConstraint,
 	preemptor *workload.Info,
 ) []WorkloadFilter {
 	if len(labels) == 0 {
@@ -106,7 +106,7 @@ func buildNumericLabelFilters(
 
 func buildPriorityFilters(
 	log logr.Logger,
-	selector *kueuev1beta2.PreemptionCandidateSelector,
+	selector *kueue.PreemptionCandidateSelector,
 	preemptor *workload.Info,
 	pcResolver priority.PriorityClassLabelResolver,
 ) []WorkloadFilter {

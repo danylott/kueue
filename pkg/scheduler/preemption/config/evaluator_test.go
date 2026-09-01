@@ -29,7 +29,7 @@ import (
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 
-	"sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	"sigs.k8s.io/kueue/pkg/resources"
 	"sigs.k8s.io/kueue/pkg/util/priority"
@@ -41,7 +41,7 @@ import (
 func TestPreemptionEvaluatorIter(t *testing.T) {
 	now := time.Now()
 
-	baseCqs := []*v1beta2.ClusterQueue{
+	baseCqs := []*kueue.ClusterQueue{
 		utiltestingapi.MakeClusterQueue("a").
 			Cohort("all").
 			ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").
@@ -57,19 +57,19 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 	unitWl := *utiltestingapi.MakeWorkload("unit", "").Request(corev1.ResourceCPU, "1")
 
 	insufficientQuotaCond := metav1.Condition{
-		Type:   string(v1beta2.InsufficientQuota),
+		Type:   string(kueue.InsufficientQuota),
 		Status: metav1.ConditionTrue,
 	}
 	quotaReclaimRequiredCond := metav1.Condition{
-		Type:   string(v1beta2.QuotaReclaimRequired),
+		Type:   string(kueue.QuotaReclaimRequired),
 		Status: metav1.ConditionTrue,
 	}
 	insufficientTopologyCond := metav1.Condition{
-		Type:   string(v1beta2.InsufficientTopology),
+		Type:   string(kueue.InsufficientTopology),
 		Status: metav1.ConditionTrue,
 	}
 
-	mockResolver := func(ref *v1beta2.PriorityClassRef) (map[string]string, bool) {
+	mockResolver := func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
 		if ref == nil {
 			return nil, false
 		}
@@ -84,12 +84,12 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		cohorts       []*v1beta2.Cohort
-		clusterQueues []*v1beta2.ClusterQueue
-		config        v1beta2.PreemptionConfig
-		admitted      []v1beta2.Workload
-		preemptorWl   *v1beta2.Workload
-		preemptorCq   v1beta2.ClusterQueueReference
+		cohorts       []*kueue.Cohort
+		clusterQueues []*kueue.ClusterQueue
+		config        kueue.PreemptionConfig
+		admitted      []kueue.Workload
+		preemptorWl   *kueue.Workload
+		preemptorCq   kueue.ClusterQueueReference
 		pcResolver    priority.PriorityClassLabelResolver
 		wantWlOrder   []string
 		wantError     string
@@ -99,12 +99,12 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 	}{
 		"no candidates for empty config": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{},
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -114,17 +114,17 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"no candidates for workload not matching a trigger": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientQuota,
+							Trigger: kueue.InsufficientQuota,
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -134,9 +134,9 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"returns error for invalid labels selector": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name: "test",
 							MatchingPreemptorWorkloads: metav1.LabelSelector{
@@ -147,12 +147,12 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 									},
 								},
 							},
-							Trigger: v1beta2.InsufficientQuota,
+							Trigger: kueue.InsufficientQuota,
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -161,28 +161,28 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			wantError:   "\"invalid\" is not a valid label selector operator",
 		},
 		"selects candidates for CQ without cohort": {
-			clusterQueues: []*v1beta2.ClusterQueue{
+			clusterQueues: []*kueue.ClusterQueue{
 				utiltestingapi.MakeClusterQueue("a").
 					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").
 						Resource(corev1.ResourceCPU, "2").Obj()).
 					Obj(),
 			},
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientQuota,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -192,22 +192,22 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"selects candidates for InsufficientQuota trigger": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientQuota,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -217,22 +217,22 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"selects candidates for QuotaReclaimRequired trigger": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.QuotaReclaimRequired,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.QuotaReclaimRequired,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -242,22 +242,22 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"selects candidates for InsufficientTopology trigger": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientTopology,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientTopology,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -267,18 +267,18 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"trigger isn't active because of min trigger requirement duration ": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:                       "test",
-							Trigger:                    v1beta2.InsufficientTopology,
+							Trigger:                    kueue.InsufficientTopology,
 							MinTriggerRequiredDuration: metav1.Duration{Duration: 10 * time.Minute},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -288,25 +288,25 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"rule with matching preemptor labels selector is triggered for matching workload": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientTopology,
+							Trigger: kueue.InsufficientTopology,
 							MatchingPreemptorWorkloads: metav1.LabelSelector{
 								MatchLabels: map[string]string{"active": "true"},
 							},
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -316,25 +316,25 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"trigger matched by labels selector with iteration break": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientTopology,
+							Trigger: kueue.InsufficientTopology,
 							MatchingPreemptorWorkloads: metav1.LabelSelector{
 								MatchLabels: map[string]string{"active": "true"},
 							},
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -345,12 +345,12 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"rule does not apply because of not matching preemptor labels selector": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientTopology,
+							Trigger: kueue.InsufficientTopology,
 							MatchingPreemptorWorkloads: metav1.LabelSelector{
 								MatchLabels: map[string]string{"active": "true"},
 							},
@@ -358,7 +358,7 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -368,17 +368,17 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"rule does not apply because of different condition on preemptor's workload": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientTopology,
+							Trigger: kueue.InsufficientTopology,
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
@@ -387,7 +387,7 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			wantWlOrder: []string{},
 		},
 		"returns candidates from ClusterQueues not under the same root": {
-			clusterQueues: []*v1beta2.ClusterQueue{
+			clusterQueues: []*kueue.ClusterQueue{
 				utiltestingapi.MakeClusterQueue("a").
 					Cohort("a-cohort").
 					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").
@@ -403,22 +403,22 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 						Resource(corev1.ResourceCPU, "1").Obj()).
 					Obj(),
 			},
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientTopology,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientTopology,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.AnyClusterQueue,
+									RelationRequirement: kueue.AnyClusterQueue,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("b1").SimpleReserveQuota("b", "default", now).Obj(),
 				*unitWl.Clone().Name("c1").SimpleReserveQuota("c", "default", now).Obj(),
@@ -429,31 +429,31 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"returns candidates based on selectors from matched trigger": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "topology rule",
-							Trigger: v1beta2.InsufficientTopology,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientTopology,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameClusterQueue,
+									RelationRequirement: kueue.SameClusterQueue,
 								},
 							},
 						},
 						{
 							Name:    "quota rule",
-							Trigger: v1beta2.InsufficientQuota,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("b1").SimpleReserveQuota("b", "default", now).Obj(),
 			},
@@ -463,22 +463,22 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"returns candidates which use preemptable resource": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "topology rule",
-							Trigger: v1beta2.InsufficientTopology,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientTopology,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "other-flavor", now).Obj(),
 			},
@@ -488,31 +488,31 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"returns non repeating candidates even when same candidates matched by different trigger rules": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "first rule",
-							Trigger: v1beta2.InsufficientTopology,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientTopology,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameClusterQueue,
+									RelationRequirement: kueue.SameClusterQueue,
 								},
 							},
 						},
 						{
 							Name:    "second rule",
-							Trigger: v1beta2.InsufficientTopology,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientTopology,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameCohortTree,
+									RelationRequirement: kueue.SameCohortTree,
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("b1").SimpleReserveQuota("b", "default", now).Obj(),
 			},
@@ -522,15 +522,15 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"PreemptingWorkloadPrioritySelector rejects when preemptor does not match priority selector": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "priority-gated rule",
-							Trigger: v1beta2.InsufficientQuota,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameClusterQueue,
+									RelationRequirement: kueue.SameClusterQueue,
 									PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
 										MatchLabels: map[string]string{"tier": "critical"},
 									},
@@ -540,12 +540,12 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
 			preemptorWl: unitWl.Clone().Name("a-incoming").
-				PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("batch-tier")).
+				PriorityClassRef(kueue.NewWorkloadPriorityClassRef("batch-tier")).
 				Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "a",
 			pcResolver:  mockResolver,
@@ -553,15 +553,15 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"PreemptingWorkloadPrioritySelector allows when preemptor matches priority selector": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "priority-gated rule",
-							Trigger: v1beta2.InsufficientQuota,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameClusterQueue,
+									RelationRequirement: kueue.SameClusterQueue,
 									PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
 										MatchLabels: map[string]string{"tier": "critical"},
 									},
@@ -571,12 +571,12 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
 			},
 			preemptorWl: unitWl.Clone().Name("a-incoming").
-				PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("critical-tier")).
+				PriorityClassRef(kueue.NewWorkloadPriorityClassRef("critical-tier")).
 				Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "a",
 			pcResolver:  mockResolver,
@@ -584,15 +584,15 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"CandidateWorkloadPrioritySelector filters candidates matching priority selector": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "candidate-priority rule",
-							Trigger: v1beta2.InsufficientQuota,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameClusterQueue,
+									RelationRequirement: kueue.SameClusterQueue,
 									CandidateWorkloadPrioritySelector: &metav1.LabelSelector{
 										MatchLabels: map[string]string{"tier": "batch"},
 									},
@@ -602,12 +602,12 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").
-					PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("batch-tier")).
+					PriorityClassRef(kueue.NewWorkloadPriorityClassRef("batch-tier")).
 					SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").
-					PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("critical-tier")).
+					PriorityClassRef(kueue.NewWorkloadPriorityClassRef("critical-tier")).
 					SimpleReserveQuota("a", "default", now).Obj(),
 			},
 			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
@@ -617,44 +617,44 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		},
 		"Priority selectors combined with RelativeWorkloadPriority": {
 			clusterQueues: baseCqs,
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "combined-priority rule",
-							Trigger: v1beta2.InsufficientQuota,
-							Candidates: []v1beta2.PreemptionCandidateSelector{
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
 								{
-									RelationRequirement: v1beta2.SameClusterQueue,
+									RelationRequirement: kueue.SameClusterQueue,
 									PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
 										MatchLabels: map[string]string{"tier": "critical"},
 									},
 									CandidateWorkloadPrioritySelector: &metav1.LabelSelector{
 										MatchLabels: map[string]string{"tier": "batch"},
 									},
-									RelativeWorkloadPriority: ptr.To(v1beta2.Lower),
+									RelativeWorkloadPriority: ptr.To(kueue.Lower),
 								},
 							},
 						},
 					},
 				},
 			},
-			admitted: []v1beta2.Workload{
+			admitted: []kueue.Workload{
 				*unitWl.Clone().Name("a1").
-					PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("batch-tier")).
+					PriorityClassRef(kueue.NewWorkloadPriorityClassRef("batch-tier")).
 					Priority(50).
 					SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a2").
-					PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("batch-tier")).
+					PriorityClassRef(kueue.NewWorkloadPriorityClassRef("batch-tier")).
 					Priority(150).
 					SimpleReserveQuota("a", "default", now).Obj(),
 				*unitWl.Clone().Name("a3").
-					PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("critical-tier")).
+					PriorityClassRef(kueue.NewWorkloadPriorityClassRef("critical-tier")).
 					Priority(50).
 					SimpleReserveQuota("a", "default", now).Obj(),
 			},
 			preemptorWl: unitWl.Clone().Name("a-incoming").
-				PriorityClassRef(v1beta2.NewWorkloadPriorityClassRef("critical-tier")).
+				PriorityClassRef(kueue.NewWorkloadPriorityClassRef("critical-tier")).
 				Priority(100).
 				Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "a",
@@ -672,7 +672,7 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			}
 
 			cl := utiltesting.NewClientBuilder().
-				WithLists(&v1beta2.WorkloadList{Items: tc.admitted}).
+				WithLists(&kueue.WorkloadList{Items: tc.admitted}).
 				Build()
 
 			cqCache := schdcache.New(cl)
@@ -732,32 +732,32 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 func Test_preemptionEvaluator_IsAnyTriggerActive(t *testing.T) {
 	unitWl := *utiltestingapi.MakeWorkload("unit", "").Request(corev1.ResourceCPU, "1")
 	insufficientQuotaCond := metav1.Condition{
-		Type:   string(v1beta2.InsufficientQuota),
+		Type:   string(kueue.InsufficientQuota),
 		Status: metav1.ConditionTrue,
 	}
 
 	tests := map[string]struct {
-		config   v1beta2.PreemptionConfig
-		workload *v1beta2.Workload
+		config   kueue.PreemptionConfig
+		workload *kueue.Workload
 		want     bool
 		wantErr  bool
 	}{
 		"empty config": {
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{},
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{},
 				},
 			},
 			workload: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
 			want:     false,
 		},
 		"active trigger": {
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "test",
-							Trigger: v1beta2.InsufficientQuota,
+							Trigger: kueue.InsufficientQuota,
 						},
 					},
 				},
@@ -766,9 +766,9 @@ func Test_preemptionEvaluator_IsAnyTriggerActive(t *testing.T) {
 			want:     true,
 		},
 		"invalid labels configuration": {
-			config: v1beta2.PreemptionConfig{
-				Spec: v1beta2.PreemptionConfigSpec{
-					Rules: []v1beta2.PreemptionRule{
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
 						{
 							Name: "test",
 							MatchingPreemptorWorkloads: metav1.LabelSelector{
@@ -779,7 +779,7 @@ func Test_preemptionEvaluator_IsAnyTriggerActive(t *testing.T) {
 									},
 								},
 							},
-							Trigger: v1beta2.InsufficientQuota,
+							Trigger: kueue.InsufficientQuota,
 						},
 					},
 				},

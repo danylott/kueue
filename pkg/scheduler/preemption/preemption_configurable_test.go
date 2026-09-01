@@ -23,6 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	corev1 "k8s.io/api/core/v1"
+	schedulingv1 "k8s.io/api/scheduling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -83,6 +84,7 @@ func TestConfigurablePreemptions(t *testing.T) {
 		cohorts                 []*kueue.Cohort
 		config                  kueue.PreemptionConfig
 		workloadPriorityClasses []kueue.WorkloadPriorityClass
+		priorityClasses         []schedulingv1.PriorityClass
 		admitted                []kueue.Workload
 		incoming                *kueue.Workload
 		targetCQ                kueue.ClusterQueueReference
@@ -390,11 +392,99 @@ func TestConfigurablePreemptions(t *testing.T) {
 			targetCQ:      "a",
 			wantPreempted: sets.New("/a1"),
 		},
+		"CandidateWorkloadPrioritySelector: matching Kubernetes standard PriorityClass allows preemption": {
+			clusterQueues: baseCQs,
+			config: kueue.PreemptionConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: defaultConfigName,
+				},
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "core-pc-rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameClusterQueue,
+									CandidateWorkloadPrioritySelector: &metav1.LabelSelector{
+										MatchLabels: map[string]string{"tier": "batch"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			priorityClasses: []schedulingv1.PriorityClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "k8s-batch",
+						Labels: map[string]string{"tier": "batch"},
+					},
+					Value: 50,
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "k8s-prod",
+						Labels: map[string]string{"tier": "prod"},
+					},
+					Value: 1000,
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1").
+					PriorityClassRef(kueue.NewPodPriorityClassRef("k8s-prod")).
+					SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("a2").
+					PriorityClassRef(kueue.NewPodPriorityClassRef("k8s-batch")).
+					SimpleReserveQuota("a", "default", now).Obj(),
+			},
+			incoming:      unitWl.Clone().Name("a_incoming").Condition(insufficientQuotaCond).Obj(),
+			targetCQ:      "a",
+			wantPreempted: sets.New("/a2"),
+		},
+		"RelativeWorkloadPriority with priority boost annotation modifies preemption ordering": {
+			clusterQueues: baseCQs,
+			config: kueue.PreemptionConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: defaultConfigName,
+				},
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "boost-priority-rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement:      kueue.SameClusterQueue,
+									RelativeWorkloadPriority: ptr.To(kueue.Lower),
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1").
+					Priority(100).
+					Annotation("kueue.x-k8s.io/priority-boost", "-60").
+					SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("a2").
+					Priority(60).
+					SimpleReserveQuota("a", "default", now).Obj(),
+			},
+			incoming: unitWl.Clone().Name("a_incoming").
+				Priority(50).
+				Condition(insufficientQuotaCond).Obj(),
+			targetCQ:      "a",
+			wantPreempted: sets.New("/a1"),
+		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.ConfigurablePreemption, true)
+			features.SetFeatureGateDuringTest(t, features.PriorityBoost, true)
 			ctx, log := utiltesting.ContextWithLog(t)
 			// Set name as UID so that candidates sorting is predictable.
 			for i := range tc.admitted {
@@ -405,6 +495,9 @@ func TestConfigurablePreemptions(t *testing.T) {
 				WithLists(&kueue.PreemptionConfigList{Items: []kueue.PreemptionConfig{tc.config}})
 			if len(tc.workloadPriorityClasses) > 0 {
 				clBuilder = clBuilder.WithLists(&kueue.WorkloadPriorityClassList{Items: tc.workloadPriorityClasses})
+			}
+			if len(tc.priorityClasses) > 0 {
+				clBuilder = clBuilder.WithLists(&schedulingv1.PriorityClassList{Items: tc.priorityClasses})
 			}
 			cl := clBuilder.Build()
 			cqCache := schdcache.New(cl)

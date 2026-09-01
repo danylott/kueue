@@ -509,13 +509,6 @@ func TestGetPriorityClassLabels(t *testing.T) {
 			wantLabels: map[string]string{"tier": "high", "prod": "true"},
 			wantFound:  true,
 		},
-		"existing PriorityClass with empty group": {
-			ref: &kueue.PriorityClassRef{
-				Name: "pc-high",
-			},
-			wantLabels: map[string]string{"tier": "high", "prod": "true"},
-			wantFound:  true,
-		},
 		"non-existent PriorityClass": {
 			ref:        kueue.NewPodPriorityClassRef("pc-missing"),
 			wantLabels: nil,
@@ -576,13 +569,15 @@ func TestNewPriorityClassLabelResolver(t *testing.T) {
 func TestWithMemoization(t *testing.T) {
 	callCounts := make(map[string]int)
 	baseResolver := func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
-		if ref == nil || ref.Name == "" {
+		if ref == nil {
 			return nil, false
 		}
-		key := string(ref.Group) + "/" + string(ref.Kind) + "/" + ref.Name
-		callCounts[key]++
+		callCounts[ref.Name]++
 		if ref.Name == "cached-pc" {
 			return map[string]string{"tier": "batch"}, true
+		}
+		if ref.Name == "unlabeled-pc" {
+			return nil, true
 		}
 		return nil, false
 	}
@@ -604,9 +599,23 @@ func TestWithMemoization(t *testing.T) {
 		}
 	}
 
-	wpcKey := "kueue.x-k8s.io/WorkloadPriorityClass/cached-pc"
-	if callCounts[wpcKey] != 1 {
-		t.Errorf("expected 1 invocation for %s, got %d", wpcKey, callCounts[wpcKey])
+	if callCounts["cached-pc"] != 1 {
+		t.Errorf("expected 1 invocation for cached-pc, got %d", callCounts["cached-pc"])
+	}
+
+	// Unlabeled PC: base resolver returns (nil, true)
+	refUnlabeled := kueue.NewWorkloadPriorityClassRef("unlabeled-pc")
+	labelsUnlabeled, foundUnlabeled := memoized(refUnlabeled)
+	if !foundUnlabeled || labelsUnlabeled != nil {
+		t.Fatalf("unexpected result on first call for unlabeled PC: found=%v, labels=%v", foundUnlabeled, labelsUnlabeled)
+	}
+
+	// Repeated lookups for unlabeled PC: MUST remain found=true on cache hits
+	for range 5 {
+		labels, found := memoized(refUnlabeled)
+		if !found || labels != nil {
+			t.Fatalf("unexpected result on repeated call for unlabeled PC: found=%v, labels=%v", found, labels)
+		}
 	}
 
 	// Lookup for missing PC: cache miss on first call, caches negative lookup
@@ -624,9 +633,8 @@ func TestWithMemoization(t *testing.T) {
 		}
 	}
 
-	missingKey := "kueue.x-k8s.io/WorkloadPriorityClass/missing-pc"
-	if callCounts[missingKey] != 1 {
-		t.Errorf("expected 1 invocation for %s, got %d", missingKey, callCounts[missingKey])
+	if callCounts["missing-pc"] != 1 {
+		t.Errorf("expected 1 invocation for missing-pc, got %d", callCounts["missing-pc"])
 	}
 
 	// Nil ref handling

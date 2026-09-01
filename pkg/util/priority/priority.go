@@ -167,19 +167,19 @@ type PriorityClassLabelResolver func(ref *kueue.PriorityClassRef) (map[string]st
 // The lookup queries the provided client.Reader (which in the Kueue scheduler is backed by
 // in-memory controller-runtime informer caches, avoiding network roundtrips to the API server).
 func GetPriorityClassLabels(ctx context.Context, reader client.Reader, ref *kueue.PriorityClassRef) (map[string]string, bool) {
-	if ref == nil || ref.Name == "" {
+	if ref == nil {
 		return nil, false
 	}
 
-	switch {
-	case ref.Group == kueue.WorkloadPriorityClassGroup || ref.Kind == kueue.WorkloadPriorityClassKind:
+	switch ref.Group {
+	case kueue.WorkloadPriorityClassGroup:
 		var wpc kueue.WorkloadPriorityClass
 		if err := reader.Get(ctx, types.NamespacedName{Name: ref.Name}, &wpc); err != nil {
 			return nil, false
 		}
 		return wpc.Labels, true
 
-	case ref.Group == kueue.PodPriorityClassGroup || ref.Kind == kueue.PodPriorityClassKind || ref.Group == "":
+	case kueue.PodPriorityClassGroup:
 		var pc schedulingv1.PriorityClass
 		if err := reader.Get(ctx, types.NamespacedName{Name: ref.Name}, &pc); err != nil {
 			return nil, false
@@ -199,6 +199,11 @@ func NewPriorityClassLabelResolver(ctx context.Context, reader client.Reader) Pr
 	}
 }
 
+type memoEntry struct {
+	labels map[string]string
+	found  bool
+}
+
 // WithMemoization wraps a PriorityClassLabelResolver with a per-preemption-cycle lookup cache.
 // In a cluster with many candidate workloads (e.g. hundreds of pending/running batch jobs),
 // the vast majority of workloads share the same small set of PriorityClasses (e.g. "batch", "standard").
@@ -207,21 +212,16 @@ func WithMemoization(resolver PriorityClassLabelResolver) PriorityClassLabelReso
 	if resolver == nil {
 		return nil
 	}
-	cache := make(map[string]map[string]string)
+	cache := make(map[kueue.PriorityClassRef]memoEntry)
 	return func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
-		if ref == nil || ref.Name == "" {
+		if ref == nil {
 			return nil, false
 		}
-		key := string(ref.Group) + "/" + string(ref.Kind) + "/" + ref.Name
-		if labels, hit := cache[key]; hit {
-			return labels, labels != nil
+		if entry, hit := cache[*ref]; hit {
+			return entry.labels, entry.found
 		}
 		labels, found := resolver(ref)
-		if found {
-			cache[key] = labels
-		} else {
-			cache[key] = nil
-		}
+		cache[*ref] = memoEntry{labels: labels, found: found}
 		return labels, found
 	}
 }
