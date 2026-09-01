@@ -20,15 +20,232 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/component-base/featuregate"
 	"k8s.io/utils/ptr"
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/features"
-	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
+	"sigs.k8s.io/kueue/pkg/util/priority"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
+
+func mockPriorityClassResolver(classes map[string]map[string]string) priority.PriorityClassLabelResolver {
+	return func(ref *kueuev1beta2.PriorityClassRef) (map[string]string, bool) {
+		if ref == nil || classes == nil {
+			return nil, false
+		}
+		labels, ok := classes[ref.Name]
+		return labels, ok
+	}
+}
+
+func TestCheckPreemptingWorkloadPriority(t *testing.T) {
+	defaultResolver := mockPriorityClassResolver(map[string]map[string]string{
+		"wpc-critical":  {"tier": "critical-training", "preemptible": "false"},
+		"wpc-batch":     {"tier": "batch", "preemptible": "true"},
+		"wpc-no-labels": {},
+	})
+
+	cases := map[string]struct {
+		selector       *metav1.LabelSelector
+		preemptor      *workload.Info
+		customResolver priority.PriorityClassLabelResolver
+		want           bool
+	}{
+		"nil selector returns true": {
+			selector:  nil,
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-critical").Obj(),
+			want:      true,
+		},
+		"empty selector returns true": {
+			selector:  &metav1.LabelSelector{},
+			preemptor: MakeWorkloadInfo("p", "ns").Obj(),
+			want:      true,
+		},
+		"matching preemptor priority class returns true": {
+			selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"tier": "critical-training"},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-critical").Obj(),
+			want:      true,
+		},
+		"non-matching preemptor priority class returns false": {
+			selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"tier": "critical-training"},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-batch").Obj(),
+			want:      false,
+		},
+		"zero-label preemptor priority class matches negative/inverted selector": {
+			selector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "tier", Operator: metav1.LabelSelectorOpDoesNotExist},
+				},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-no-labels").Obj(),
+			want:      true,
+		},
+		"labeled preemptor priority class does not match negative/inverted selector": {
+			selector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "tier", Operator: metav1.LabelSelectorOpDoesNotExist},
+				},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-critical").Obj(),
+			want:      false,
+		},
+		"zero-label preemptor priority class does not match positive key selector": {
+			selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"tier": "critical-training"},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-no-labels").Obj(),
+			want:      false,
+		},
+		"missing preemptor priority class in resolver returns false": {
+			selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"tier": "critical-training"},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("non-existent").Obj(),
+			want:      false,
+		},
+		"preemptor with nil PriorityClassRef returns false": {
+			selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"tier": "critical-training"},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").Obj(),
+			want:      false,
+		},
+		"nil resolver returns false for non-empty selector": {
+			selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"tier": "critical-training"},
+			},
+			preemptor:      MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-critical").Obj(),
+			customResolver: nil,
+			want:           false,
+		},
+		"invalid label selector returns false": {
+			selector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "invalid!", Operator: "InvalidOp"},
+				},
+			},
+			preemptor: MakeWorkloadInfo("p", "ns").WorkloadPriorityClassRef("wpc-critical").Obj(),
+			want:      false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			res := defaultResolver
+			if tc.customResolver != nil || name == "nil resolver returns false for non-empty selector" {
+				res = tc.customResolver
+			}
+			got := CheckPreemptingWorkloadPriority(logr.Discard(), tc.selector, tc.preemptor, res)
+			if got != tc.want {
+				t.Errorf("CheckPreemptingWorkloadPriority() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCandidateWorkloadPriorityFilter_Matches(t *testing.T) {
+	defaultResolver := mockPriorityClassResolver(map[string]map[string]string{
+		"wpc-batch":     {"tier": "batch", "preemptible": "true"},
+		"wpc-critical":  {"tier": "critical", "preemptible": "false"},
+		"wpc-no-labels": {},
+		"pc-low":        {"priority-tier": "low"},
+	})
+
+	parseSelector := func(ls *metav1.LabelSelector) labels.Selector {
+		if ls == nil {
+			return nil
+		}
+		sel, err := metav1.LabelSelectorAsSelector(ls)
+		if err != nil {
+			t.Fatalf("failed to parse selector: %v", err)
+		}
+		return sel
+	}
+
+	cases := map[string]struct {
+		candidate      *workload.Info
+		selector       labels.Selector
+		customResolver priority.PriorityClassLabelResolver
+		wantMatch      bool
+	}{
+		"matching WorkloadPriorityClass returns true": {
+			candidate: MakeWorkloadInfo("wl", "ns").WorkloadPriorityClassRef("wpc-batch").Obj(),
+			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"preemptible": "true"}}),
+			wantMatch: true,
+		},
+		"non-matching WorkloadPriorityClass returns false": {
+			candidate: MakeWorkloadInfo("wl", "ns").WorkloadPriorityClassRef("wpc-critical").Obj(),
+			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"preemptible": "true"}}),
+			wantMatch: false,
+		},
+		"matching standard PriorityClass returns true": {
+			candidate: MakeWorkloadInfo("wl", "ns").PodPriorityClassRef("pc-low").Obj(),
+			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"priority-tier": "low"}}),
+			wantMatch: true,
+		},
+		"zero-label candidate priority class matches negative/inverted selector": {
+			candidate: MakeWorkloadInfo("wl", "ns").WorkloadPriorityClassRef("wpc-no-labels").Obj(),
+			selector: parseSelector(&metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "preemptible", Operator: metav1.LabelSelectorOpDoesNotExist},
+				},
+			}),
+			wantMatch: true,
+		},
+		"zero-label candidate priority class does not match positive key selector": {
+			candidate: MakeWorkloadInfo("wl", "ns").WorkloadPriorityClassRef("wpc-no-labels").Obj(),
+			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"preemptible": "true"}}),
+			wantMatch: false,
+		},
+		"missing WorkloadPriorityClass in snapshot returns false": {
+			candidate: MakeWorkloadInfo("wl", "ns").WorkloadPriorityClassRef("wpc-nonexistent").Obj(),
+			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"preemptible": "true"}}),
+			wantMatch: false,
+		},
+		"candidate with nil PriorityClassRef returns false": {
+			candidate: MakeWorkloadInfo("wl", "ns").Obj(),
+			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"preemptible": "true"}}),
+			wantMatch: false,
+		},
+		"nil selector matches candidate without PC": {
+			candidate: MakeWorkloadInfo("wl", "ns").Obj(),
+			selector:  nil,
+			wantMatch: true,
+		},
+		"empty selector matches candidate without PC": {
+			candidate: MakeWorkloadInfo("wl", "ns").Obj(),
+			selector:  labels.Everything(),
+			wantMatch: true,
+		},
+		"nil resolver returns false for non-empty selector": {
+			candidate:      MakeWorkloadInfo("wl", "ns").WorkloadPriorityClassRef("wpc-batch").Obj(),
+			selector:       parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"preemptible": "true"}}),
+			customResolver: nil,
+			wantMatch:      false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			res := defaultResolver
+			if tc.customResolver != nil || name == "nil resolver returns false for non-empty selector" {
+				res = tc.customResolver
+			}
+			filter := NewCandidateWorkloadPriorityFilter(logr.Discard(), tc.selector, res)
+			if got := filter.Matches(tc.candidate); got != tc.wantMatch {
+				t.Errorf("Matches(candidate) = %v, want %v", got, tc.wantMatch)
+			}
+		})
+	}
+}
 
 func TestRelativeWorkloadPriorityFilter_Matches(t *testing.T) {
 	cases := map[string]struct {
@@ -137,17 +354,17 @@ func TestRelativeWorkloadPriorityFilter_Matches(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			preemptorBuilder := utiltestingapi.MakeWorkload("preemptor", "ns")
+			preemptorBuilder := MakeWorkloadInfo("preemptor", "ns")
 			if tc.preemptorPriority != nil {
 				preemptorBuilder = preemptorBuilder.Priority(*tc.preemptorPriority)
 			}
-			preemptor := workload.NewInfo(preemptorBuilder.Obj())
+			preemptor := preemptorBuilder.Obj()
 
-			candBuilder := utiltestingapi.MakeWorkload("candidate", "ns")
+			candBuilder := MakeWorkloadInfo("candidate", "ns")
 			if tc.candidatePriority != nil {
 				candBuilder = candBuilder.Priority(*tc.candidatePriority)
 			}
-			candidate := workload.NewInfo(candBuilder.Obj())
+			candidate := candBuilder.Obj()
 
 			filter := NewRelativeWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
 			if got := filter.Matches(candidate); got != tc.wantMatch {
@@ -206,17 +423,17 @@ func TestRelativeWorkloadPriorityFilter_PriorityBoost(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGatesDuringTest(t, tc.featureGates)
 
-			preemptorBuilder := utiltestingapi.MakeWorkload("preemptor", "ns").Priority(tc.preemptorPriority)
+			preemptorBuilder := MakeWorkloadInfo("preemptor", "ns").Priority(tc.preemptorPriority)
 			if tc.preemptorBoost != "" {
 				preemptorBuilder = preemptorBuilder.Annotation(controllerconstants.PriorityBoostAnnotationKey, tc.preemptorBoost)
 			}
-			preemptor := workload.NewInfo(preemptorBuilder.Obj())
+			preemptor := preemptorBuilder.Obj()
 
-			candBuilder := utiltestingapi.MakeWorkload("candidate", "ns").Priority(tc.candidatePriority)
+			candBuilder := MakeWorkloadInfo("candidate", "ns").Priority(tc.candidatePriority)
 			if tc.candidateBoost != "" {
 				candBuilder = candBuilder.Annotation(controllerconstants.PriorityBoostAnnotationKey, tc.candidateBoost)
 			}
-			candidate := workload.NewInfo(candBuilder.Obj())
+			candidate := candBuilder.Obj()
 
 			filter := NewRelativeWorkloadPriorityFilter(logr.Discard(), tc.relation, preemptor)
 			if got := filter.Matches(candidate); got != tc.wantMatch {

@@ -56,12 +56,76 @@ func (b *snapshotBuilder) ClusterQueue(name kueuev1beta2.ClusterQueueReference, 
 }
 
 func (b *snapshotBuilder) Build() *schdcache.Snapshot {
-	return &schdcache.Snapshot{Manager: b.mgr}
+	return &schdcache.Snapshot{
+		Manager: b.mgr,
+	}
 }
 
-func makeWorkloadInfo(name, namespace string, localQueue kueuev1beta2.LocalQueueName, clusterQueue kueuev1beta2.ClusterQueueReference) *workload.Info {
-	wl := utiltestingapi.MakeWorkload(name, namespace).Queue(localQueue).Obj()
-	info := workload.NewInfo(wl)
-	info.ClusterQueue = clusterQueue
+type WorkloadInfoWrapper struct {
+	*utiltestingapi.WorkloadWrapper
+	clusterQueue kueuev1beta2.ClusterQueueReference
+}
+
+func MakeWorkloadInfo(name, namespace string) *WorkloadInfoWrapper {
+	return &WorkloadInfoWrapper{
+		WorkloadWrapper: utiltestingapi.MakeWorkload(name, namespace),
+	}
+}
+
+func (w *WorkloadInfoWrapper) ClusterQueue(cq kueuev1beta2.ClusterQueueReference) *WorkloadInfoWrapper {
+	w.clusterQueue = cq
+	return w
+}
+
+func (w *WorkloadInfoWrapper) Queue(q kueuev1beta2.LocalQueueName) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.Queue(q)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) Label(k, v string) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.Label(k, v)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) Labels(l map[string]string) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.Labels(l)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) Annotation(k, v string) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.Annotation(k, v)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) Annotations(a map[string]string) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.Annotations(a)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) Priority(p int32) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.Priority(p)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) PriorityClassRef(ref *kueuev1beta2.PriorityClassRef) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.PriorityClassRef(ref)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) WorkloadPriorityClassRef(name string) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.WorkloadPriorityClassRef(name)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) PodPriorityClassRef(name string) *WorkloadInfoWrapper {
+	w.WorkloadWrapper.PodPriorityClassRef(name)
+	return w
+}
+
+func (w *WorkloadInfoWrapper) Obj() *workload.Info {
+	info := workload.NewInfo(w.WorkloadWrapper.Obj())
+	if w.clusterQueue != "" {
+		info.ClusterQueue = w.clusterQueue
+	}
 	return info
 }

@@ -18,9 +18,11 @@ package filters
 
 import (
 	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
+	"sigs.k8s.io/kueue/pkg/util/priority"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -30,14 +32,19 @@ func NewCandidateFilters(
 	selector *kueuev1beta2.PreemptionCandidateSelector,
 	preemptor *workload.Info,
 	snapshot *schdcache.Snapshot,
+	pcResolver priority.PriorityClassLabelResolver,
 ) CandidateFilters {
 	if selector == nil {
 		return CandidateFilters{}
 	}
 
+	if !CheckPreemptingWorkloadPriority(log, selector.PreemptingWorkloadPrioritySelector, preemptor, pcResolver) {
+		return RejectAllCandidateFilters()
+	}
+
 	cqRelationFilters, wlRelationFilters := buildRelationFilters(log, selector.RelationRequirement, preemptor, snapshot)
 	wlNumericFilters := buildNumericLabelFilters(log, selector.NumericLabels, preemptor)
-	wlPriorityFilters := buildPriorityFilters(log, selector.RelativeWorkloadPriority, preemptor)
+	wlPriorityFilters := buildPriorityFilters(log, selector, preemptor, pcResolver)
 
 	var wlFilters []WorkloadFilter
 	wlFilters = append(wlFilters, wlRelationFilters...)
@@ -45,6 +52,7 @@ func NewCandidateFilters(
 	wlFilters = append(wlFilters, wlPriorityFilters...)
 
 	return CandidateFilters{
+		RejectAll: false,
 		CQFilters: cqRelationFilters,
 		WLFilters: wlFilters,
 	}
@@ -98,12 +106,25 @@ func buildNumericLabelFilters(
 
 func buildPriorityFilters(
 	log logr.Logger,
-	relativePriority *kueuev1beta2.RelativeConstraint,
+	selector *kueuev1beta2.PreemptionCandidateSelector,
 	preemptor *workload.Info,
+	pcResolver priority.PriorityClassLabelResolver,
 ) []WorkloadFilter {
-	if relativePriority == nil {
+	if selector == nil {
 		return nil
 	}
-	return []WorkloadFilter{NewRelativeWorkloadPriorityFilter(log, *relativePriority, preemptor)}
+	var filters []WorkloadFilter
+	if selector.CandidateWorkloadPrioritySelector != nil {
+		ls, err := metav1.LabelSelectorAsSelector(selector.CandidateWorkloadPrioritySelector)
+		if err != nil {
+			log.Error(err, "Invalid CandidateWorkloadPrioritySelector", "selector", selector.CandidateWorkloadPrioritySelector)
+			filters = append(filters, NewRejectAllWLFilter())
+		} else if !ls.Empty() {
+			filters = append(filters, NewCandidateWorkloadPriorityFilter(log, ls, pcResolver))
+		}
+	}
+	if selector.RelativeWorkloadPriority != nil {
+		filters = append(filters, NewRelativeWorkloadPriorityFilter(log, *selector.RelativeWorkloadPriority, preemptor))
+	}
+	return filters
 }
-

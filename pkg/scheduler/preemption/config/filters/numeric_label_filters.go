@@ -21,7 +21,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/ptr"
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -49,7 +48,7 @@ func NewNumericLabelFilter(log logr.Logger, constraint kueuev1beta2.NumericLabel
 	if constraint.Relation != nil {
 		preemptorLog := filterLog.WithValues("preemptor", klog.KObj(preemptor.Obj))
 		if val, ok := tryGetLabelValue(preemptorLog, preemptor, constraint.Key, constraint.DefaultValue); ok {
-			f.preemptorVal = ptr.To(val)
+			f.preemptorVal = new(val)
 		} else {
 			preemptorLog.V(2).Info("Preemptor missing required numeric label without defaultValue; relational comparison will not match any candidates")
 		}

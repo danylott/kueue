@@ -22,6 +22,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/utils/ptr"
 
 	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
@@ -37,8 +39,44 @@ func TestNewCandidateFilters(t *testing.T) {
 		ClusterQueue("cq1", "subA1").
 		Build()
 
-	preemptor := makeWorkloadInfo("preemptor", "ns1", "lq1", "cq1")
-	preemptor.Obj.Labels = map[string]string{"tpu-size": "8"}
+	resolver := mockPriorityClassResolver(map[string]map[string]string{
+		"wpc-critical": {"tier": "critical-training"},
+		"wpc-batch":    {"tier": "batch"},
+	})
+
+	preemptor := MakeWorkloadInfo("preemptor", "ns1").
+		Queue("lq1").
+		ClusterQueue("cq1").
+		Label("tpu-size", "8").
+		Priority(100).
+		Obj()
+
+	preemptorWithPC := MakeWorkloadInfo("preemptorWithPC", "ns1").
+		Queue("lq1").
+		ClusterQueue("cq1").
+		Label("tpu-size", "8").
+		Priority(100).
+		WorkloadPriorityClassRef("wpc-critical").
+		Obj()
+
+	preemptorWithBatchPC := MakeWorkloadInfo("preemptorWithBatchPC", "ns1").
+		Queue("lq1").
+		ClusterQueue("cq1").
+		WorkloadPriorityClassRef("wpc-batch").
+		Obj()
+
+	preemptorWithMissingPC := MakeWorkloadInfo("preemptorWithMissingPC", "ns1").
+		Queue("lq1").
+		ClusterQueue("cq1").
+		WorkloadPriorityClassRef("non-existent").
+		Obj()
+
+	candSelectorPreemptible, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchLabels: map[string]string{"preemptible": "true"},
+	})
+	if err != nil {
+		t.Fatalf("Failed to parse label selector: %v", err)
+	}
 
 	cases := map[string]struct {
 		selector    *kueuev1beta2.PreemptionCandidateSelector
@@ -167,14 +205,174 @@ func TestNewCandidateFilters(t *testing.T) {
 							DefaultValue: ptr.To[int32](1),
 							Relation:     ptr.To(kueuev1beta2.LowerOrEqual),
 						},
-						preemptorVal: ptr.To[int32](8), // extracted from preemptor's "tpu-size": "8" label
+						preemptorVal: ptr.To[int32](8),
 					},
 					&numericLabelFilter{
 						constraint: kueuev1beta2.NumericLabelConstraint{
 							Key:      "priority-boost",
 							MinValue: ptr.To[int32](10),
 						},
-						preemptorVal: nil, // no relation requested, so preemptor value is not parsed
+						preemptorVal: nil,
+					},
+				},
+			},
+		},
+		"PreemptingWorkloadPrioritySelector matching preemptor proceeds with compilation": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameClusterQueue,
+				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"tier": "critical-training"},
+				},
+			},
+			preemptor: preemptorWithPC,
+			wantFilters: CandidateFilters{
+				RejectAll: false,
+				CQFilters: []ClusterQueueFilter{
+					&sameClusterQueueFilter{preemptorCQ: "cq1"},
+				},
+			},
+		},
+		"PreemptingWorkloadPrioritySelector not matching preemptor returns RejectAll": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameClusterQueue,
+				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"tier": "critical-training"},
+				},
+			},
+			preemptor:   preemptorWithBatchPC,
+			wantFilters: CandidateFilters{RejectAll: true},
+		},
+		"PreemptingWorkloadPrioritySelector with nil PriorityClassRef returns RejectAll": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameClusterQueue,
+				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"tier": "critical-training"},
+				},
+			},
+			preemptor:   preemptor,
+			wantFilters: CandidateFilters{RejectAll: true},
+		},
+		"PreemptingWorkloadPrioritySelector referencing missing PriorityClass returns RejectAll": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameClusterQueue,
+				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"tier": "critical-training"},
+				},
+			},
+			preemptor:   preemptorWithMissingPC,
+			wantFilters: CandidateFilters{RejectAll: true},
+		},
+		"PreemptingWorkloadPrioritySelector with empty selector matches and proceeds": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement:                kueuev1beta2.SameClusterQueue,
+				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{},
+			},
+			preemptor: preemptor,
+			wantFilters: CandidateFilters{
+				RejectAll: false,
+				CQFilters: []ClusterQueueFilter{
+					&sameClusterQueueFilter{preemptorCQ: "cq1"},
+				},
+			},
+		},
+		"PreemptingWorkloadPrioritySelector with invalid selector returns RejectAll": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameClusterQueue,
+				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchExpressions: []metav1.LabelSelectorRequirement{
+						{Key: "tier", Operator: metav1.LabelSelectorOperator("InvalidOp")},
+					},
+				},
+			},
+			preemptor:   preemptorWithPC,
+			wantFilters: CandidateFilters{RejectAll: true},
+		},
+		"CandidateWorkloadPrioritySelector and RelativeWorkloadPriority are compiled into WLFilters": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameClusterQueue,
+				CandidateWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"preemptible": "true"},
+				},
+				RelativeWorkloadPriority: ptr.To(kueuev1beta2.LowerOrEqual),
+			},
+			preemptor: preemptorWithPC,
+			wantFilters: CandidateFilters{
+				RejectAll: false,
+				CQFilters: []ClusterQueueFilter{
+					&sameClusterQueueFilter{preemptorCQ: "cq1"},
+				},
+				WLFilters: []WorkloadFilter{
+					&candidateWorkloadPriorityFilter{
+						selector: candSelectorPreemptible,
+					},
+					&relativeWorkloadPriorityFilter{
+						relation:          kueuev1beta2.LowerOrEqual,
+						preemptorPriority: 100,
+					},
+				},
+			},
+		},
+		"CandidateWorkloadPrioritySelector with invalid selector appends rejectAllWLFilter": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameClusterQueue,
+				CandidateWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchExpressions: []metav1.LabelSelectorRequirement{
+						{Key: "tier", Operator: metav1.LabelSelectorOperator("InvalidOp")},
+					},
+				},
+			},
+			preemptor: preemptorWithPC,
+			wantFilters: CandidateFilters{
+				RejectAll: false,
+				CQFilters: []ClusterQueueFilter{
+					&sameClusterQueueFilter{preemptorCQ: "cq1"},
+				},
+				WLFilters: []WorkloadFilter{
+					&rejectAllWLFilter{},
+				},
+			},
+		},
+		"Full combination of all selector criteria compiles into complete CandidateFilters": {
+			selector: &kueuev1beta2.PreemptionCandidateSelector{
+				RelationRequirement: kueuev1beta2.SameCohort,
+				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"tier": "critical-training"},
+				},
+				CandidateWorkloadPrioritySelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"preemptible": "true"},
+				},
+				RelativeWorkloadPriority: ptr.To(kueuev1beta2.Lower),
+				NumericLabels: []kueuev1beta2.NumericLabelConstraint{
+					{
+						Key:      "tpu-size",
+						Relation: ptr.To(kueuev1beta2.Lower),
+					},
+				},
+			},
+			preemptor: preemptorWithPC,
+			wantFilters: CandidateFilters{
+				RejectAll: false,
+				CQFilters: []ClusterQueueFilter{
+					&sameCohortFilter{
+						preemptorCQ:     "cq1",
+						preemptorCohort: "subA1",
+						hasCohort:       true,
+					},
+				},
+				WLFilters: []WorkloadFilter{
+					&numericLabelFilter{
+						constraint: kueuev1beta2.NumericLabelConstraint{
+							Key:      "tpu-size",
+							Relation: ptr.To(kueuev1beta2.Lower),
+						},
+						preemptorVal: ptr.To[int32](8),
+					},
+					&candidateWorkloadPriorityFilter{
+						selector: candSelectorPreemptible,
+					},
+					&relativeWorkloadPriorityFilter{
+						relation:          kueuev1beta2.Lower,
+						preemptorPriority: 100,
 					},
 				},
 			},
@@ -192,7 +390,7 @@ func TestNewCandidateFilters(t *testing.T) {
 				WLFilters: []WorkloadFilter{
 					&relativeWorkloadPriorityFilter{
 						relation:          kueuev1beta2.Lower,
-						preemptorPriority: 0, // default priority when not explicitly set on preemptor
+						preemptorPriority: 100,
 					},
 				},
 			},
@@ -229,7 +427,7 @@ func TestNewCandidateFilters(t *testing.T) {
 					},
 					&relativeWorkloadPriorityFilter{
 						relation:          kueuev1beta2.LowerOrEqual,
-						preemptorPriority: 0,
+						preemptorPriority: 100,
 					},
 				},
 			},
@@ -243,17 +441,29 @@ func TestNewCandidateFilters(t *testing.T) {
 			sameCohortTreeFilter{},
 			sameLocalQueueFilter{},
 			rejectAllCQFilter{},
+			rejectAllWLFilter{},
 			numericLabelFilter{},
+			candidateWorkloadPriorityFilter{},
 			relativeWorkloadPriorityFilter{},
 		),
 		cmpopts.IgnoreFields(numericLabelFilter{}, "log"),
+		cmpopts.IgnoreFields(candidateWorkloadPriorityFilter{}, "log", "resolver"),
 		cmpopts.IgnoreFields(relativeWorkloadPriorityFilter{}, "log"),
+		cmp.Comparer(func(a, b labels.Selector) bool {
+			if a == nil && b == nil {
+				return true
+			}
+			if a == nil || b == nil {
+				return false
+			}
+			return a.String() == b.String()
+		}),
 		cmpopts.EquateEmpty(),
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := NewCandidateFilters(logr.Discard(), tc.selector, tc.preemptor, snapshot)
+			got := NewCandidateFilters(logr.Discard(), tc.selector, tc.preemptor, snapshot, resolver)
 			if diff := cmp.Diff(tc.wantFilters, got, cmpOptions...); diff != "" {
 				t.Errorf("NewCandidateFilters() mismatch (-want +got):\n%s", diff)
 			}

@@ -431,3 +431,212 @@ func TestEffectivePriority(t *testing.T) {
 		})
 	}
 }
+
+func TestGetPriorityClassLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := schedulingv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("Failed adding scheduling scheme: %v", err)
+	}
+	if err := kueue.AddToScheme(scheme); err != nil {
+		t.Fatalf("Failed adding kueue scheme: %v", err)
+	}
+
+	wpcList := &kueue.WorkloadPriorityClassList{
+		Items: []kueue.WorkloadPriorityClass{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "wpc-batch",
+					Labels: map[string]string{"tier": "batch", "preemptible": "true"},
+				},
+				Value: 50,
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "wpc-empty-labels",
+				},
+				Value: 10,
+			},
+		},
+	}
+
+	pcList := &schedulingv1.PriorityClassList{
+		Items: []schedulingv1.PriorityClass{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "pc-high",
+					Labels: map[string]string{"tier": "high", "prod": "true"},
+				},
+				Value: 1000,
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithLists(wpcList, pcList).Build()
+	ctx, _ := utiltesting.ContextWithLog(t)
+
+	tests := map[string]struct {
+		ref        *kueue.PriorityClassRef
+		wantLabels map[string]string
+		wantFound  bool
+	}{
+		"nil ref": {
+			ref:        nil,
+			wantLabels: nil,
+			wantFound:  false,
+		},
+		"empty ref name": {
+			ref:        &kueue.PriorityClassRef{Name: ""},
+			wantLabels: nil,
+			wantFound:  false,
+		},
+		"existing WorkloadPriorityClass with labels": {
+			ref:        kueue.NewWorkloadPriorityClassRef("wpc-batch"),
+			wantLabels: map[string]string{"tier": "batch", "preemptible": "true"},
+			wantFound:  true,
+		},
+		"existing WorkloadPriorityClass with empty labels": {
+			ref:        kueue.NewWorkloadPriorityClassRef("wpc-empty-labels"),
+			wantLabels: nil,
+			wantFound:  true,
+		},
+		"non-existent WorkloadPriorityClass": {
+			ref:        kueue.NewWorkloadPriorityClassRef("wpc-missing"),
+			wantLabels: nil,
+			wantFound:  false,
+		},
+		"existing PriorityClass with labels": {
+			ref:        kueue.NewPodPriorityClassRef("pc-high"),
+			wantLabels: map[string]string{"tier": "high", "prod": "true"},
+			wantFound:  true,
+		},
+		"existing PriorityClass with empty group": {
+			ref: &kueue.PriorityClassRef{
+				Name: "pc-high",
+			},
+			wantLabels: map[string]string{"tier": "high", "prod": "true"},
+			wantFound:  true,
+		},
+		"non-existent PriorityClass": {
+			ref:        kueue.NewPodPriorityClassRef("pc-missing"),
+			wantLabels: nil,
+			wantFound:  false,
+		},
+		"unsupported group and kind": {
+			ref: &kueue.PriorityClassRef{
+				Group: "custom.example.com",
+				Kind:  "CustomPriorityClass",
+				Name:  "custom-pc",
+			},
+			wantLabels: nil,
+			wantFound:  false,
+		},
+	}
+
+	for desc, tt := range tests {
+		t.Run(desc, func(t *testing.T) {
+			gotLabels, gotFound := GetPriorityClassLabels(ctx, client, tt.ref)
+			if gotFound != tt.wantFound {
+				t.Errorf("GetPriorityClassLabels() found = %v, want %v", gotFound, tt.wantFound)
+			}
+			if diff := cmp.Diff(tt.wantLabels, gotLabels); diff != "" {
+				t.Errorf("GetPriorityClassLabels() labels (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestNewPriorityClassLabelResolver(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := kueue.AddToScheme(scheme); err != nil {
+		t.Fatalf("Failed adding kueue scheme: %v", err)
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithLists(&kueue.WorkloadPriorityClassList{
+		Items: []kueue.WorkloadPriorityClass{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "wpc-test",
+					Labels: map[string]string{"env": "test"},
+				},
+			},
+		},
+	}).Build()
+	ctx, _ := utiltesting.ContextWithLog(t)
+
+	resolver := NewPriorityClassLabelResolver(ctx, client)
+	labels, found := resolver(kueue.NewWorkloadPriorityClassRef("wpc-test"))
+	if !found {
+		t.Errorf("expected wpc-test to be found")
+	}
+	if diff := cmp.Diff(map[string]string{"env": "test"}, labels); diff != "" {
+		t.Errorf("labels mismatch (-want,+got):\n%s", diff)
+	}
+}
+
+func TestWithMemoization(t *testing.T) {
+	callCounts := make(map[string]int)
+	baseResolver := func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
+		if ref == nil || ref.Name == "" {
+			return nil, false
+		}
+		key := string(ref.Group) + "/" + string(ref.Kind) + "/" + ref.Name
+		callCounts[key]++
+		if ref.Name == "cached-pc" {
+			return map[string]string{"tier": "batch"}, true
+		}
+		return nil, false
+	}
+
+	memoized := WithMemoization(baseResolver)
+
+	// First lookup for cached-pc: cache miss, invokes base resolver
+	ref1 := kueue.NewWorkloadPriorityClassRef("cached-pc")
+	labels1, found1 := memoized(ref1)
+	if !found1 || labels1["tier"] != "batch" {
+		t.Fatalf("unexpected result on first call: found=%v, labels=%v", found1, labels1)
+	}
+
+	// Repeated lookups for cached-pc: cache hits, should NOT invoke base resolver
+	for range 5 {
+		labels, found := memoized(ref1)
+		if !found || labels["tier"] != "batch" {
+			t.Fatalf("unexpected result on repeated call: found=%v, labels=%v", found, labels)
+		}
+	}
+
+	wpcKey := "kueue.x-k8s.io/WorkloadPriorityClass/cached-pc"
+	if callCounts[wpcKey] != 1 {
+		t.Errorf("expected 1 invocation for %s, got %d", wpcKey, callCounts[wpcKey])
+	}
+
+	// Lookup for missing PC: cache miss on first call, caches negative lookup
+	refMissing := kueue.NewWorkloadPriorityClassRef("missing-pc")
+	labelsMiss, foundMiss := memoized(refMissing)
+	if foundMiss || labelsMiss != nil {
+		t.Fatalf("expected missing PC to return false, got found=%v", foundMiss)
+	}
+
+	// Repeated missing lookups: should NOT invoke base resolver again
+	for range 5 {
+		labels, found := memoized(refMissing)
+		if found || labels != nil {
+			t.Fatalf("expected missing PC to remain false on repeated call")
+		}
+	}
+
+	missingKey := "kueue.x-k8s.io/WorkloadPriorityClass/missing-pc"
+	if callCounts[missingKey] != 1 {
+		t.Errorf("expected 1 invocation for %s, got %d", missingKey, callCounts[missingKey])
+	}
+
+	// Nil ref handling
+	labelsNil, foundNil := memoized(nil)
+	if foundNil || labelsNil != nil {
+		t.Errorf("expected nil ref to return false")
+	}
+
+	// Nil resolver handling
+	if WithMemoization(nil) != nil {
+		t.Errorf("WithMemoization(nil) should return nil")
+	}
+}

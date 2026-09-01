@@ -35,6 +35,39 @@ type WorkloadFilter interface {
 
 // CandidateFilters contains the complete filter set compiled for a candidate selector.
 type CandidateFilters struct {
+	RejectAll bool
 	CQFilters []ClusterQueueFilter
 	WLFilters []WorkloadFilter
+}
+
+// RejectAllCandidateFilters returns a CandidateFilters instance indicating that
+// no candidates can be selected under the rule.
+func RejectAllCandidateFilters() CandidateFilters {
+	return CandidateFilters{
+		RejectAll: true,
+	}
+}
+
+// rejectAllWLFilter is a WorkloadFilter that unconditionally rejects all candidate workloads.
+type rejectAllWLFilter struct{}
+
+func (f *rejectAllWLFilter) Matches(*workload.Info) bool {
+	return false
+}
+
+// NewRejectAllWLFilter returns a WorkloadFilter that rejects all candidate workloads.
+func NewRejectAllWLFilter() WorkloadFilter {
+	return &rejectAllWLFilter{}
+}
+
+// rejectAllCQFilter is a ClusterQueueFilter that unconditionally rejects all ClusterQueues.
+type rejectAllCQFilter struct{}
+
+func (f *rejectAllCQFilter) Matches(*schdcache.ClusterQueueSnapshot) bool {
+	return false
+}
+
+// NewRejectAllCQFilter returns a ClusterQueueFilter that rejects all ClusterQueues.
+func NewRejectAllCQFilter() ClusterQueueFilter {
+	return &rejectAllCQFilter{}
 }

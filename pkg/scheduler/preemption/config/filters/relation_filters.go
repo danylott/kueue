@@ -113,15 +113,3 @@ func NewSameLocalQueueFilter(namespace string, queueName kueuev1beta2.LocalQueue
 func (f *sameLocalQueueFilter) Matches(wl *workload.Info) bool {
 	return wl.Obj.Namespace == f.namespace && wl.Obj.Spec.QueueName == f.queueName
 }
-
-// rejectAllCQFilter unconditionally rejects all ClusterQueues (used when an unknown relation is specified).
-type rejectAllCQFilter struct{}
-
-// NewRejectAllCQFilter creates a ClusterQueueFilter that rejects all ClusterQueues.
-func NewRejectAllCQFilter() ClusterQueueFilter {
-	return &rejectAllCQFilter{}
-}
-
-func (f *rejectAllCQFilter) Matches(_ *schdcache.ClusterQueueSnapshot) bool {
-	return false
-}
