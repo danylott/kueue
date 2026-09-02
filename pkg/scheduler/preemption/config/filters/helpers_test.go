@@ -20,7 +20,6 @@ import (
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/cache/hierarchy"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
-	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -61,71 +60,8 @@ func (b *snapshotBuilder) Build() *schdcache.Snapshot {
 	}
 }
 
-type WorkloadInfoWrapper struct {
-	*utiltestingapi.WorkloadWrapper
-	clusterQueue kueue.ClusterQueueReference
-}
-
-func MakeWorkloadInfo(name, namespace string) *WorkloadInfoWrapper {
-	return &WorkloadInfoWrapper{
-		WorkloadWrapper: utiltestingapi.MakeWorkload(name, namespace),
-	}
-}
-
-func (w *WorkloadInfoWrapper) ClusterQueue(cq kueue.ClusterQueueReference) *WorkloadInfoWrapper {
-	w.clusterQueue = cq
-	return w
-}
-
-func (w *WorkloadInfoWrapper) Queue(q kueue.LocalQueueName) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.Queue(q)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) Label(k, v string) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.Label(k, v)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) Labels(l map[string]string) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.Labels(l)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) Annotation(k, v string) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.Annotation(k, v)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) Annotations(a map[string]string) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.Annotations(a)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) Priority(p int32) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.Priority(p)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) PriorityClassRef(ref *kueue.PriorityClassRef) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.PriorityClassRef(ref)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) WorkloadPriorityClassRef(name string) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.WorkloadPriorityClassRef(name)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) PodPriorityClassRef(name string) *WorkloadInfoWrapper {
-	w.WorkloadWrapper.PodPriorityClassRef(name)
-	return w
-}
-
-func (w *WorkloadInfoWrapper) Obj() *workload.Info {
-	info := workload.NewInfo(w.WorkloadWrapper.Obj())
-	if w.clusterQueue != "" {
-		info.ClusterQueue = w.clusterQueue
-	}
+func makeWorkloadInfo(w *kueue.Workload, cq kueue.ClusterQueueReference) *workload.Info {
+	info := workload.NewInfo(w)
+	info.ClusterQueue = cq
 	return info
 }

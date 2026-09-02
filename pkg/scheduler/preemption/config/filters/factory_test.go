@@ -27,6 +27,8 @@ import (
 	"k8s.io/utils/ptr"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
+	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -39,31 +41,28 @@ func TestNewCandidateFilters(t *testing.T) {
 		ClusterQueue("cq1", "subA1").
 		Build()
 
-	resolver := mockPriorityClassResolver(map[string]map[string]string{
-		"wpc-critical": {"tier": "critical-training"},
-		"wpc-batch":    {"tier": "batch"},
-	})
+	clientReader := utiltesting.NewFakeClient(
+		utiltestingapi.MakeWorkloadPriorityClass("wpc-critical").Label("tier", "critical-training").Obj(),
+		utiltestingapi.MakeWorkloadPriorityClass("wpc-batch").Label("tier", "batch").Obj(),
+	)
 
-	preemptor := MakeWorkloadInfo("preemptor", "ns1").
+	preemptor := makeWorkloadInfo(utiltestingapi.MakeWorkload("preemptor", "ns1").
 		Queue("lq1").
-		ClusterQueue("cq1").
 		Label("tpu-size", "8").
 		Priority(100).
-		Obj()
+		Obj(), "cq1")
 
-	preemptorWithPC := MakeWorkloadInfo("preemptorWithPC", "ns1").
+	preemptorWithPC := makeWorkloadInfo(utiltestingapi.MakeWorkload("preemptorWithPC", "ns1").
 		Queue("lq1").
-		ClusterQueue("cq1").
 		Label("tpu-size", "8").
 		Priority(100).
 		WorkloadPriorityClassRef("wpc-critical").
-		Obj()
+		Obj(), "cq1")
 
-	preemptorWithBatchPC := MakeWorkloadInfo("preemptorWithBatchPC", "ns1").
+	preemptorWithBatchPC := makeWorkloadInfo(utiltestingapi.MakeWorkload("preemptorWithBatchPC", "ns1").
 		Queue("lq1").
-		ClusterQueue("cq1").
 		WorkloadPriorityClassRef("wpc-batch").
-		Obj()
+		Obj(), "cq1")
 
 	candSelectorPreemptible, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
 		MatchLabels: map[string]string{"preemptible": "true"},
@@ -396,7 +395,7 @@ func TestNewCandidateFilters(t *testing.T) {
 			relativeWorkloadPriorityFilter{},
 		),
 		cmpopts.IgnoreFields(numericLabelFilter{}, "log"),
-		cmpopts.IgnoreFields(candidateWorkloadPriorityFilter{}, "log", "resolver"),
+		cmpopts.IgnoreFields(candidateWorkloadPriorityFilter{}, "ctx", "log", "reader"),
 		cmpopts.IgnoreFields(relativeWorkloadPriorityFilter{}, "log"),
 		cmp.Comparer(func(a, b labels.Selector) bool {
 			if a == nil && b == nil {
@@ -412,7 +411,7 @@ func TestNewCandidateFilters(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := NewCandidateFilters(logr.Discard(), tc.selector, tc.preemptor, snapshot, resolver)
+			got := NewCandidateFilters(t.Context(), logr.Discard(), tc.selector, tc.preemptor, snapshot, clientReader)
 			if diff := cmp.Diff(tc.wantFilters, got, cmpOptions...); diff != "" {
 				t.Errorf("NewCandidateFilters() mismatch (-want +got):\n%s", diff)
 			}

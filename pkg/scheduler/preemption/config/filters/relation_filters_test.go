@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
+	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -237,19 +238,19 @@ func TestSameLocalQueueFilter(t *testing.T) {
 		wantMatch bool
 	}{
 		"matching namespace and queue name": {
-			candidate: MakeWorkloadInfo("c-exact", "ns1").Queue("lq1").ClusterQueue("cq1SubA1").Obj(),
+			candidate: workload.NewInfo(utiltestingapi.MakeWorkload("c-exact", "ns1").Queue("lq1").Obj()),
 			wantMatch: true,
 		},
 		"different local queue name rejected": {
-			candidate: MakeWorkloadInfo("c-diff-lq", "ns1").Queue("lq2").ClusterQueue("cq1SubA1").Obj(),
+			candidate: workload.NewInfo(utiltestingapi.MakeWorkload("c-diff-lq", "ns1").Queue("lq2").Obj()),
 			wantMatch: false,
 		},
 		"different namespace rejected": {
-			candidate: MakeWorkloadInfo("c-diff-ns", "ns2").Queue("lq1").ClusterQueue("cq1SubA1").Obj(),
+			candidate: workload.NewInfo(utiltestingapi.MakeWorkload("c-diff-ns", "ns2").Queue("lq1").Obj()),
 			wantMatch: false,
 		},
 		"different namespace and queue name rejected": {
-			candidate: MakeWorkloadInfo("c-diff-both", "ns2").Queue("lq2").ClusterQueue("cq1SubA1").Obj(),
+			candidate: workload.NewInfo(utiltestingapi.MakeWorkload("c-diff-both", "ns2").Queue("lq2").Obj()),
 			wantMatch: false,
 		},
 	}

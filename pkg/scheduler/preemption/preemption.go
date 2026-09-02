@@ -635,8 +635,7 @@ func (p *Preemptor) configurablePreemptions(preemptionCtx *preemptionCtx) []*Tar
 		return nil
 	}
 
-	pcResolver := priority.WithMemoization(priority.NewPriorityClassLabelResolver(preemptionCtx.ctx, p.client))
-	preemptionEvaluator := configurable.NewPreemptionEvaluator(preemptionCtx.log, preemptionCtx.clock, *preemptionConfig, pcResolver)
+	preemptionEvaluator := configurable.NewPreemptionEvaluator(preemptionCtx.ctx, preemptionCtx.log, preemptionCtx.clock, *preemptionConfig, p.client)
 
 	iter, err := preemptionEvaluator.Iter(preemptionCtx.snapshot, &preemptionCtx.preemptor, preemptionCtx.frsNeedPreemption)
 	if err != nil {

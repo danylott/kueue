@@ -18,6 +18,7 @@ package config
 
 import (
 	"cmp"
+	"context"
 	"iter"
 	"slices"
 
@@ -27,34 +28,37 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	"sigs.k8s.io/kueue/pkg/resources"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/classical"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/config/filters"
-	"sigs.k8s.io/kueue/pkg/util/priority"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 type preemptionEvaluator struct {
-	log        logr.Logger
-	clock      clock.Clock
-	config     kueue.PreemptionConfig
-	pcResolver priority.PriorityClassLabelResolver
+	ctx    context.Context
+	log    logr.Logger
+	clock  clock.Clock
+	config kueue.PreemptionConfig
+	reader client.Reader
 }
 
 func NewPreemptionEvaluator(
+	ctx context.Context,
 	log logr.Logger,
 	clock clock.Clock,
 	config kueue.PreemptionConfig,
-	pcResolver priority.PriorityClassLabelResolver,
+	reader client.Reader,
 ) *preemptionEvaluator {
 	return &preemptionEvaluator{
-		log:        log,
-		clock:      clock,
-		config:     config,
-		pcResolver: pcResolver,
+		ctx:    ctx,
+		log:    log,
+		clock:  clock,
+		config: config,
+		reader: reader,
 	}
 }
 
@@ -90,7 +94,7 @@ func (p *preemptionEvaluator) findCandidates(snapshot *schdcache.Snapshot, preem
 		}
 
 		for _, selector := range rule.Candidates {
-			filter := filters.NewCandidateFilters(p.log, &selector, preemptor, snapshot, p.pcResolver)
+			filter := filters.NewCandidateFilters(p.ctx, p.log, &selector, preemptor, snapshot, p.reader)
 			if filter.RejectAll {
 				continue
 			}

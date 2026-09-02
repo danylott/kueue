@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -158,70 +159,31 @@ func DefaultWorkloadPriorityClassExist(ctx context.Context, c client.Client) (bo
 	return true, nil
 }
 
-// PriorityClassLabelResolver retrieves the label map for a referenced PriorityClass or WorkloadPriorityClass.
-// Returns (labels, true) if found, or (nil, false) if the object does not exist or has an invalid reference.
-type PriorityClassLabelResolver func(ref *kueue.PriorityClassRef) (map[string]string, bool)
-
 // GetPriorityClassLabels returns the labels of the referenced PriorityClass or WorkloadPriorityClass.
-// If the object is not found or the reference is invalid, it returns (nil, false).
+// If the object does not exist, it returns an IsNotFound error.
 // The lookup queries the provided client.Reader (which in the Kueue scheduler is backed by
 // in-memory controller-runtime informer caches, avoiding network roundtrips to the API server).
-func GetPriorityClassLabels(ctx context.Context, reader client.Reader, ref *kueue.PriorityClassRef) (map[string]string, bool) {
+func GetPriorityClassLabels(ctx context.Context, reader client.Reader, ref *kueue.PriorityClassRef) (map[string]string, error) {
 	if ref == nil {
-		return nil, false
+		return nil, nil
 	}
 
 	switch ref.Group {
 	case kueue.WorkloadPriorityClassGroup:
 		var wpc kueue.WorkloadPriorityClass
 		if err := reader.Get(ctx, types.NamespacedName{Name: ref.Name}, &wpc); err != nil {
-			return nil, false
+			return nil, err
 		}
-		return wpc.Labels, true
+		return wpc.Labels, nil
 
 	case kueue.PodPriorityClassGroup:
 		var pc schedulingv1.PriorityClass
 		if err := reader.Get(ctx, types.NamespacedName{Name: ref.Name}, &pc); err != nil {
-			return nil, false
+			return nil, err
 		}
-		return pc.Labels, true
+		return pc.Labels, nil
 
 	default:
-		return nil, false
-	}
-}
-
-// NewPriorityClassLabelResolver constructs a PriorityClassLabelResolver closure backed by a client.Reader.
-// This decouples preemption filters from direct Kubernetes client dependencies and enables lightweight mocking in tests.
-func NewPriorityClassLabelResolver(ctx context.Context, reader client.Reader) PriorityClassLabelResolver {
-	return func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
-		return GetPriorityClassLabels(ctx, reader, ref)
-	}
-}
-
-type memoEntry struct {
-	labels map[string]string
-	found  bool
-}
-
-// WithMemoization wraps a PriorityClassLabelResolver with a per-preemption-cycle lookup cache.
-// In a cluster with many candidate workloads (e.g. hundreds of pending/running batch jobs),
-// the vast majority of workloads share the same small set of PriorityClasses (e.g. "batch", "standard").
-// Memoization prevents repeated informer cache lock acquisitions and lookups during a single preemption pass.
-func WithMemoization(resolver PriorityClassLabelResolver) PriorityClassLabelResolver {
-	if resolver == nil {
-		return nil
-	}
-	cache := make(map[kueue.PriorityClassRef]memoEntry)
-	return func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
-		if ref == nil {
-			return nil, false
-		}
-		if entry, hit := cache[*ref]; hit {
-			return entry.labels, entry.found
-		}
-		labels, found := resolver(ref)
-		cache[*ref] = memoEntry{labels: labels, found: found}
-		return labels, found
+		return nil, apierrors.NewNotFound(schema.GroupResource{Group: string(ref.Group), Resource: "priorityclasses"}, ref.Name)
 	}
 }

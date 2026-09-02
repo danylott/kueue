@@ -28,11 +28,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	"sigs.k8s.io/kueue/pkg/resources"
-	"sigs.k8s.io/kueue/pkg/util/priority"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -69,19 +69,10 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		Status: metav1.ConditionTrue,
 	}
 
-	mockResolver := func(ref *kueue.PriorityClassRef) (map[string]string, bool) {
-		if ref == nil {
-			return nil, false
-		}
-		switch ref.Name {
-		case "critical-tier":
-			return map[string]string{"tier": "critical"}, true
-		case "batch-tier":
-			return map[string]string{"tier": "batch"}, true
-		default:
-			return nil, false
-		}
-	}
+	clientReader := utiltesting.NewFakeClient(
+		utiltestingapi.MakeWorkloadPriorityClass("critical-tier").Label("tier", "critical").Obj(),
+		utiltestingapi.MakeWorkloadPriorityClass("batch-tier").Label("tier", "batch").Obj(),
+	)
 
 	tests := map[string]struct {
 		cohorts       []*kueue.Cohort
@@ -90,7 +81,7 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 		admitted      []kueue.Workload
 		preemptorWl   *kueue.Workload
 		preemptorCq   kueue.ClusterQueueReference
-		pcResolver    priority.PriorityClassLabelResolver
+		client        client.Reader
 		wantWlOrder   []string
 		wantError     string
 
@@ -548,7 +539,6 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 				PriorityClassRef(kueue.NewWorkloadPriorityClassRef("batch-tier")).
 				Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "a",
-			pcResolver:  mockResolver,
 			wantWlOrder: []string{},
 		},
 		"PreemptingWorkloadPrioritySelector allows when preemptor matches priority selector": {
@@ -579,7 +569,6 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 				PriorityClassRef(kueue.NewWorkloadPriorityClassRef("critical-tier")).
 				Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "a",
-			pcResolver:  mockResolver,
 			wantWlOrder: []string{"a1", "a2"},
 		},
 		"CandidateWorkloadPrioritySelector filters candidates matching priority selector": {
@@ -612,7 +601,6 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			},
 			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "a",
-			pcResolver:  mockResolver,
 			wantWlOrder: []string{"a1"},
 		},
 		"Priority selectors combined with RelativeWorkloadPriority": {
@@ -658,7 +646,6 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 				Priority(100).
 				Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "a",
-			pcResolver:  mockResolver,
 			wantWlOrder: []string{"a1"},
 		},
 	}
@@ -695,7 +682,7 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 				t.Fatalf("unexpected error while building snapshot: %v", err)
 			}
 
-			evaluator := NewPreemptionEvaluator(log, clock.RealClock{}, tc.config, tc.pcResolver)
+			evaluator := NewPreemptionEvaluator(ctx, log, clock.RealClock{}, tc.config, clientReader)
 
 			wlInfo := workload.NewInfo(tc.preemptorWl)
 			wlInfo.ClusterQueue = tc.preemptorCq
@@ -791,8 +778,8 @@ func Test_preemptionEvaluator_IsAnyTriggerActive(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, log := utiltesting.ContextWithLog(t)
-			p := NewPreemptionEvaluator(log, clock.RealClock{}, tc.config, nil)
+			ctx, log := utiltesting.ContextWithLog(t)
+			p := NewPreemptionEvaluator(ctx, log, clock.RealClock{}, tc.config, nil)
 
 			wlInfo := workload.NewInfo(tc.workload)
 			wlInfo.ClusterQueue = "test-cq"

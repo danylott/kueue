@@ -23,8 +23,17 @@ import (
 	"k8s.io/utils/ptr"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
+
+func wlWithLabels(labels map[string]string) *workload.Info {
+	w := utiltestingapi.MakeWorkload("wl", "")
+	if len(labels) > 0 {
+		w.Labels(labels)
+	}
+	return workload.NewInfo(w.Obj())
+}
 
 func TestNumericLabelFilterMatches(t *testing.T) {
 	cases := map[string]struct {
@@ -39,8 +48,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: true,
 		},
 		"LowerOrEqual: candidate equal to preemptor matches": {
@@ -48,8 +57,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: true,
 		},
 		"LowerOrEqual: candidate greater than preemptor rejected": {
@@ -57,8 +66,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "16").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "16"}),
 			wantMatch: false,
 		},
 		"Lower: candidate strictly smaller matches": {
@@ -66,8 +75,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.Lower),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: true,
 		},
 		"Lower: candidate equal to preemptor rejected": {
@@ -75,8 +84,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.Lower),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: false,
 		},
 		"Lower: candidate strictly greater rejected": {
@@ -84,8 +93,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.Lower),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "16").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "16"}),
 			wantMatch: false,
 		},
 		"Greater: candidate strictly greater matches": {
@@ -93,8 +102,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.Greater),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "16").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "16"}),
 			wantMatch: true,
 		},
 		"Greater: candidate equal to preemptor rejected": {
@@ -102,8 +111,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.Greater),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: false,
 		},
 		"Greater: candidate strictly smaller rejected": {
@@ -111,8 +120,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.Greater),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: false,
 		},
 		"GreaterOrEqual: candidate strictly greater matches": {
@@ -120,8 +129,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.GreaterOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "16").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "16"}),
 			wantMatch: true,
 		},
 		"GreaterOrEqual: candidate equal matches": {
@@ -129,8 +138,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.GreaterOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: true,
 		},
 		"GreaterOrEqual: candidate strictly smaller rejected": {
@@ -138,8 +147,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.GreaterOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: false,
 		},
 
@@ -150,8 +159,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("other", "123").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"other": "123"}),
 			wantMatch: true,
 		},
 		"Default value fallback: candidate missing label uses default value failing relation": {
@@ -160,8 +169,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](16),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("other", "123").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"other": "123"}),
 			wantMatch: false,
 		},
 		"Candidate missing label with nil default is excluded": {
@@ -169,8 +178,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("other", "123").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"other": "123"}),
 			wantMatch: false,
 		},
 		"Candidate valid label takes precedence over default value": {
@@ -179,8 +188,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](2),
 				Relation:     ptr.To(kueue.Greater),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "5").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "10").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "5"}),
+			candidate: wlWithLabels(map[string]string{"size": "10"}),
 			wantMatch: true,
 		},
 		"Malformed candidate label falls back to default value": {
@@ -189,8 +198,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "invalid-int").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "invalid-int"}),
 			wantMatch: true,
 		},
 		"Malformed candidate label with nil default is excluded": {
@@ -198,8 +207,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "invalid-int").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "invalid-int"}),
 			wantMatch: false,
 		},
 		"Candidate with nil labels map falls back to default value": {
@@ -208,8 +217,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(nil),
 			wantMatch: true,
 		},
 		"Candidate with nil labels map and nil default is excluded": {
@@ -217,8 +226,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(nil),
 			wantMatch: false,
 		},
 
@@ -228,8 +237,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("other", "123").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"other": "123"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: false,
 		},
 		"Preemptor missing label falls back to default value satisfying relation": {
@@ -238,8 +247,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](8),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("other-key", "123").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"other-key": "123"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: true,
 		},
 		"Preemptor missing label falls back to default value failing relation": {
@@ -248,8 +257,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("other-key", "123").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(map[string]string{"other-key": "123"}),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: false,
 		},
 		"Preemptor malformed label with nil default rejects preemption when relation is required": {
@@ -257,8 +266,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "invalid-int").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "invalid-int"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: false,
 		},
 		"Preemptor malformed label falls back to default value satisfying relation": {
@@ -267,8 +276,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](8),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "invalid-int").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "invalid-int"}),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: true,
 		},
 		"Preemptor with nil labels map falls back to default value": {
@@ -277,8 +286,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](8),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "4").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"size": "4"}),
 			wantMatch: true,
 		},
 		"Both preemptor and candidate missing label use default value": {
@@ -287,8 +296,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(nil),
 			wantMatch: true,
 		},
 		"Both preemptor and candidate missing label use default value failing strict relation": {
@@ -297,8 +306,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.Lower),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(nil),
 			wantMatch: false,
 		},
 
@@ -308,8 +317,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "priority-boost",
 				MinValue: ptr.To[int32](10),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("priority-boost", "5").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"priority-boost": "5"}),
 			wantMatch: false,
 		},
 		"MinValue bound: candidate exactly equal to MinValue permitted": {
@@ -317,8 +326,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "priority-boost",
 				MinValue: ptr.To[int32](10),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("priority-boost", "10").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"priority-boost": "10"}),
 			wantMatch: true,
 		},
 		"MinValue bound: candidate strictly greater than MinValue permitted": {
@@ -326,8 +335,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "priority-boost",
 				MinValue: ptr.To[int32](10),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("priority-boost", "15").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"priority-boost": "15"}),
 			wantMatch: true,
 		},
 		"MaxValue bound: candidate above MaxValue rejected": {
@@ -335,8 +344,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "priority-boost",
 				MaxValue: ptr.To[int32](10),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("priority-boost", "15").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"priority-boost": "15"}),
 			wantMatch: false,
 		},
 		"MaxValue bound: candidate exactly equal to MaxValue permitted": {
@@ -344,8 +353,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "priority-boost",
 				MaxValue: ptr.To[int32](10),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("priority-boost", "10").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"priority-boost": "10"}),
 			wantMatch: true,
 		},
 		"MaxValue bound: candidate strictly smaller than MaxValue permitted": {
@@ -353,8 +362,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "priority-boost",
 				MaxValue: ptr.To[int32](10),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("priority-boost", "5").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"priority-boost": "5"}),
 			wantMatch: true,
 		},
 		"Range bounds (MinValue and MaxValue): candidate strictly inside range permitted": {
@@ -363,8 +372,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				MinValue: ptr.To[int32](4),
 				MaxValue: ptr.To[int32](16),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: true,
 		},
 		"Range bounds (MinValue and MaxValue): candidate strictly below MinValue rejected": {
@@ -373,8 +382,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				MinValue: ptr.To[int32](4),
 				MaxValue: ptr.To[int32](16),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "2").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"size": "2"}),
 			wantMatch: false,
 		},
 		"Range bounds (MinValue and MaxValue): candidate strictly above MaxValue rejected": {
@@ -383,8 +392,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				MinValue: ptr.To[int32](4),
 				MaxValue: ptr.To[int32](16),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "32").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"size": "32"}),
 			wantMatch: false,
 		},
 		// 5. Unconstrained Label Key Checks (No relation, no bounds - verifies integer label presence)
@@ -392,16 +401,16 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 			constraint: kueue.NumericLabelConstraint{
 				Key: "size",
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: true,
 		},
 		"Unconstrained label: candidate missing label without default rejected": {
 			constraint: kueue.NumericLabelConstraint{
 				Key: "size",
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("other", "123").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"other": "123"}),
 			wantMatch: false,
 		},
 		"Unconstrained label: candidate missing label with default matches": {
@@ -409,8 +418,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:          "size",
 				DefaultValue: ptr.To[int32](8),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("other", "123").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"other": "123"}),
 			wantMatch: true,
 		},
 
@@ -420,8 +429,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "prio",
 				Relation: ptr.To(kueue.Lower),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("prio", "-5").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("prio", "-10").Obj(),
+			preemptor: wlWithLabels(map[string]string{"prio": "-5"}),
+			candidate: wlWithLabels(map[string]string{"prio": "-10"}),
 			wantMatch: true,
 		},
 		"Negative numeric values: candidate violating negative MinValue rejected": {
@@ -429,8 +438,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "prio",
 				MinValue: ptr.To[int32](-5),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("prio", "-10").Obj(),
+			preemptor: wlWithLabels(nil),
+			candidate: wlWithLabels(map[string]string{"prio": "-10"}),
 			wantMatch: false,
 		},
 		"Malformed label: float string fails integer parsing and falls back to default": {
@@ -439,8 +448,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "3.14").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "3.14"}),
 			wantMatch: true,
 		},
 		"Malformed label: integer overflow string fails parsing and falls back to default": {
@@ -449,8 +458,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				DefaultValue: ptr.To[int32](4),
 				Relation:     ptr.To(kueue.LowerOrEqual),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "999999999999999999").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "999999999999999999"}),
 			wantMatch: true,
 		},
 
@@ -460,8 +469,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Key:      "size",
 				Relation: ptr.To[kueue.RelativeConstraint]("UnknownRelation"),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "4").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "2").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "4"}),
+			candidate: wlWithLabels(map[string]string{"size": "2"}),
 			wantMatch: false,
 		},
 		"Composite constraint: candidate passes all bounds, relation, and default value": {
@@ -472,8 +481,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				MinValue:     ptr.To[int32](2),
 				MaxValue:     ptr.To[int32](8),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "6").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("distraction", "100").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "6"}),
+			candidate: wlWithLabels(map[string]string{"distraction": "100"}),
 			wantMatch: true,
 		},
 		"Composite constraint: candidate rejected by relation despite passing bounds": {
@@ -484,8 +493,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				MinValue:     ptr.To[int32](2),
 				MaxValue:     ptr.To[int32](8),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "6").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "8").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "6"}),
+			candidate: wlWithLabels(map[string]string{"size": "8"}),
 			wantMatch: false,
 		},
 		"Composite constraint: candidate rejected by MinValue despite passing relation": {
@@ -494,8 +503,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Relation: ptr.To(kueue.Lower),
 				MinValue: ptr.To[int32](4),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "2").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "2"}),
 			wantMatch: false,
 		},
 		"Composite constraint: candidate rejected by MaxValue despite passing relation": {
@@ -504,8 +513,8 @@ func TestNumericLabelFilterMatches(t *testing.T) {
 				Relation: ptr.To(kueue.Greater),
 				MaxValue: ptr.To[int32](16),
 			},
-			preemptor: MakeWorkloadInfo("p", "").Label("size", "8").Obj(),
-			candidate: MakeWorkloadInfo("c", "").Label("size", "32").Obj(),
+			preemptor: wlWithLabels(map[string]string{"size": "8"}),
+			candidate: wlWithLabels(map[string]string{"size": "32"}),
 			wantMatch: false,
 		},
 	}

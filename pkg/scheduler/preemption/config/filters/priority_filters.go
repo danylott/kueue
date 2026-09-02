@@ -17,10 +17,14 @@ limitations under the License.
 package filters
 
 import (
+	"context"
+
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/util/priority"
@@ -29,12 +33,13 @@ import (
 
 // CheckPreemptingWorkloadPriority evaluates whether a preemptor workload satisfies the PreemptingWorkloadPrioritySelector constraint.
 // If selector is nil or empty, returns true (all preemptors allowed).
-// If preemptor has no priorityClassRef or resolver returns false (not found), returns false.
+// If preemptor has no priorityClassRef or priority class is not found, returns false.
 func CheckPreemptingWorkloadPriority(
+	ctx context.Context,
 	log logr.Logger,
 	selector *metav1.LabelSelector,
 	preemptor *workload.Info,
-	resolver priority.PriorityClassLabelResolver,
+	reader client.Reader,
 ) bool {
 	if selector == nil {
 		return true
@@ -50,27 +55,30 @@ func CheckPreemptingWorkloadPriority(
 	if preemptor.Obj.Spec.PriorityClassRef == nil {
 		return false
 	}
-	return matchPriorityClassLabels(log, ls, preemptor.Obj.Spec.PriorityClassRef, resolver)
+	return matchPriorityClassLabels(ctx, log, ls, preemptor.Obj.Spec.PriorityClassRef, reader)
 }
 
 // candidateWorkloadPriorityFilter matches candidates whose PriorityClass satisfies a label selector.
 type candidateWorkloadPriorityFilter struct {
+	ctx      context.Context
 	log      logr.Logger
 	selector labels.Selector
-	resolver priority.PriorityClassLabelResolver
+	reader   client.Reader
 }
 
 // NewCandidateWorkloadPriorityFilter creates a WorkloadFilter to evaluate candidate workloads
 // based on their PriorityClass / WorkloadPriorityClass labels.
 func NewCandidateWorkloadPriorityFilter(
+	ctx context.Context,
 	log logr.Logger,
 	selector labels.Selector,
-	resolver priority.PriorityClassLabelResolver,
+	reader client.Reader,
 ) WorkloadFilter {
 	return &candidateWorkloadPriorityFilter{
+		ctx:      ctx,
 		log:      log.WithValues("filter", "CandidateWorkloadPriority"),
 		selector: selector,
-		resolver: resolver,
+		reader:   reader,
 	}
 }
 
@@ -82,24 +90,29 @@ func (f *candidateWorkloadPriorityFilter) Matches(wl *workload.Info) bool {
 	if wl.Obj.Spec.PriorityClassRef == nil {
 		return false
 	}
-	return matchPriorityClassLabels(f.log, f.selector, wl.Obj.Spec.PriorityClassRef, f.resolver)
+	return matchPriorityClassLabels(f.ctx, f.log, f.selector, wl.Obj.Spec.PriorityClassRef, f.reader)
 }
 
 func matchPriorityClassLabels(
+	ctx context.Context,
 	log logr.Logger,
 	sel labels.Selector,
 	ref *kueue.PriorityClassRef,
-	resolver priority.PriorityClassLabelResolver,
+	reader client.Reader,
 ) bool {
 	if sel == nil || sel.Empty() {
 		return true
 	}
-	if ref == nil || resolver == nil {
+	if ref == nil || reader == nil {
 		return false
 	}
-	pcLabels, found := resolver(ref)
-	if !found {
-		log.V(3).Info("Priority class not found", "ref", ref)
+	pcLabels, err := priority.GetPriorityClassLabels(ctx, reader, ref)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(3).Info("Priority class not found", "ref", ref)
+		} else {
+			log.Error(err, "Failed to get PriorityClass labels", "ref", ref)
+		}
 		return false
 	}
 	return sel.Matches(labels.Set(pcLabels))
