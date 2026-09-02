@@ -20,7 +20,6 @@ import (
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/cache/hierarchy"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
-	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 type snapshotBuilder struct {
@@ -58,10 +57,4 @@ func (b *snapshotBuilder) Build() *schdcache.Snapshot {
 	return &schdcache.Snapshot{
 		Manager: b.mgr,
 	}
-}
-
-func makeWorkloadInfo(w *kueue.Workload, cq kueue.ClusterQueueReference) *workload.Info {
-	info := workload.NewInfo(w)
-	info.ClusterQueue = cq
-	return info
 }

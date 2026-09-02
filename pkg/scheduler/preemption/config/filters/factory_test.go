@@ -32,6 +32,12 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
+func makeWorkloadInfo(w *kueue.Workload, cq kueue.ClusterQueueReference) *workload.Info {
+	info := workload.NewInfo(w)
+	info.ClusterQueue = cq
+	return info
+}
+
 func TestNewCandidateFilters(t *testing.T) {
 	// Minimal snapshot required by constructor for resolving preemptor's cohort ancestors:
 	// rootA -> subA1 -> cq1
