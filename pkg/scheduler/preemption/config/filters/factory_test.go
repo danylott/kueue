@@ -72,9 +72,10 @@ func TestNewCandidateFilters(t *testing.T) {
 	}
 
 	cases := map[string]struct {
-		selector    *kueue.PreemptionCandidateSelector
-		preemptor   *workload.Info
-		wantFilters CandidateFilters
+		selector      *kueue.PreemptionCandidateSelector
+		preemptor     *workload.Info
+		wantFilters   CandidateFilters
+		wantRejectAll bool
 	}{
 		"nil selector returns empty CandidateFilters": {
 			selector:    nil,
@@ -219,21 +220,21 @@ func TestNewCandidateFilters(t *testing.T) {
 			},
 			preemptor: preemptorWithPC,
 			wantFilters: CandidateFilters{
-				RejectAll: false,
 				CQFilters: []ClusterQueueFilter{
 					&sameClusterQueueFilter{preemptorCQ: "cq1"},
 				},
 			},
 		},
-		"PreemptingWorkloadPrioritySelector not matching preemptor returns RejectAll": {
+		"PreemptingWorkloadPrioritySelector not matching preemptor returns rejectAll true": {
 			selector: &kueue.PreemptionCandidateSelector{
 				RelationRequirement: kueue.SameClusterQueue,
 				PreemptingWorkloadPrioritySelector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{"tier": "critical-training"},
 				},
 			},
-			preemptor:   preemptorWithBatchPC,
-			wantFilters: CandidateFilters{RejectAll: true},
+			preemptor:     preemptorWithBatchPC,
+			wantFilters:   CandidateFilters{},
+			wantRejectAll: true,
 		},
 		"CandidateWorkloadPrioritySelector and RelativeWorkloadPriority are compiled into WLFilters": {
 			selector: &kueue.PreemptionCandidateSelector{
@@ -245,7 +246,6 @@ func TestNewCandidateFilters(t *testing.T) {
 			},
 			preemptor: preemptorWithPC,
 			wantFilters: CandidateFilters{
-				RejectAll: false,
 				CQFilters: []ClusterQueueFilter{
 					&sameClusterQueueFilter{preemptorCQ: "cq1"},
 				},
@@ -271,7 +271,6 @@ func TestNewCandidateFilters(t *testing.T) {
 			},
 			preemptor: preemptorWithPC,
 			wantFilters: CandidateFilters{
-				RejectAll: false,
 				CQFilters: []ClusterQueueFilter{
 					&sameClusterQueueFilter{preemptorCQ: "cq1"},
 				},
@@ -299,7 +298,6 @@ func TestNewCandidateFilters(t *testing.T) {
 			},
 			preemptor: preemptorWithPC,
 			wantFilters: CandidateFilters{
-				RejectAll: false,
 				CQFilters: []ClusterQueueFilter{
 					&sameCohortFilter{
 						preemptorCQ:     "cq1",
@@ -411,8 +409,11 @@ func TestNewCandidateFilters(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := NewCandidateFilters(t.Context(), logr.Discard(), tc.selector, tc.preemptor, snapshot, clientReader)
-			if diff := cmp.Diff(tc.wantFilters, got, cmpOptions...); diff != "" {
+			gotFilters, gotRejectAll := NewCandidateFilters(t.Context(), logr.Discard(), tc.selector, tc.preemptor, snapshot, clientReader)
+			if gotRejectAll != tc.wantRejectAll {
+				t.Errorf("NewCandidateFilters() rejectAll = %v, want %v", gotRejectAll, tc.wantRejectAll)
+			}
+			if diff := cmp.Diff(tc.wantFilters, gotFilters, cmpOptions...); diff != "" {
 				t.Errorf("NewCandidateFilters() mismatch (-want +got):\n%s", diff)
 			}
 		})

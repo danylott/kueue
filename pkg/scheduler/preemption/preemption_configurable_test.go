@@ -490,16 +490,13 @@ func TestConfigurablePreemptions(t *testing.T) {
 			for i := range tc.admitted {
 				tc.admitted[i].UID = types.UID(tc.admitted[i].Name)
 			}
-			clBuilder := utiltesting.NewClientBuilder().
+			cl := utiltesting.NewClientBuilder().
 				WithLists(&kueue.WorkloadList{Items: tc.admitted}).
-				WithLists(&kueue.PreemptionConfigList{Items: []kueue.PreemptionConfig{tc.config}})
-			if len(tc.workloadPriorityClasses) > 0 {
-				clBuilder = clBuilder.WithLists(&kueue.WorkloadPriorityClassList{Items: tc.workloadPriorityClasses})
-			}
-			if len(tc.priorityClasses) > 0 {
-				clBuilder = clBuilder.WithLists(&schedulingv1.PriorityClassList{Items: tc.priorityClasses})
-			}
-			cl := clBuilder.Build()
+				WithLists(&kueue.PreemptionConfigList{Items: []kueue.PreemptionConfig{tc.config}}).
+				WithLists(&kueue.WorkloadPriorityClassList{Items: tc.workloadPriorityClasses}).
+				WithLists(&schedulingv1.PriorityClassList{Items: tc.priorityClasses}).
+				Build()
+
 			cqCache := schdcache.New(cl)
 			cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
 			for _, cq := range tc.clusterQueues {

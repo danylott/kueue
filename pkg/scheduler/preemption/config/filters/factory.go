@@ -28,7 +28,8 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// NewCandidateFilters compiles PreemptionCandidateSelector rules into CandidateFilters.
+// NewCandidateFilters compiles PreemptionCandidateSelector rules into CandidateFilters & RejectAll boolean (if preemptor doesn't pass).
+// It returns (CandidateFilters{}, true) if the preemptor fails to match PreemptingWorkloadPrioritySelector and all the candidates should be rejected.
 func NewCandidateFilters(
 	ctx context.Context,
 	log logr.Logger,
@@ -36,13 +37,13 @@ func NewCandidateFilters(
 	preemptor *workload.Info,
 	snapshot *schdcache.Snapshot,
 	reader client.Reader,
-) CandidateFilters {
+) (CandidateFilters, bool) {
 	if selector == nil {
-		return CandidateFilters{}
+		return CandidateFilters{}, false
 	}
 
 	if !CheckPreemptingWorkloadPriority(ctx, log, selector.PreemptingWorkloadPrioritySelector, preemptor, reader) {
-		return RejectAllCandidateFilters()
+		return CandidateFilters{}, true
 	}
 
 	cqRelationFilters, wlRelationFilters := buildRelationFilters(log, selector.RelationRequirement, preemptor, snapshot)
@@ -55,10 +56,9 @@ func NewCandidateFilters(
 	wlFilters = append(wlFilters, wlPriorityFilters...)
 
 	return CandidateFilters{
-		RejectAll: false,
 		CQFilters: cqRelationFilters,
 		WLFilters: wlFilters,
-	}
+	}, false
 }
 
 func buildRelationFilters(

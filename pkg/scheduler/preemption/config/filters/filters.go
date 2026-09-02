@@ -35,17 +35,8 @@ type WorkloadFilter interface {
 
 // CandidateFilters contains the complete filter set compiled for a candidate selector.
 type CandidateFilters struct {
-	RejectAll bool
 	CQFilters []ClusterQueueFilter
 	WLFilters []WorkloadFilter
-}
-
-// RejectAllCandidateFilters returns a CandidateFilters instance indicating that
-// no candidates can be selected under the rule.
-func RejectAllCandidateFilters() CandidateFilters {
-	return CandidateFilters{
-		RejectAll: true,
-	}
 }
 
 // rejectAllWLFilter is a WorkloadFilter that unconditionally rejects all candidate workloads.

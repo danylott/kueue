@@ -94,8 +94,8 @@ func (p *preemptionEvaluator) findCandidates(snapshot *schdcache.Snapshot, preem
 		}
 
 		for _, selector := range rule.Candidates {
-			filter := filters.NewCandidateFilters(p.ctx, p.log, &selector, preemptor, snapshot, p.reader)
-			if filter.RejectAll {
+			filter, rejectAll := filters.NewCandidateFilters(p.ctx, p.log, &selector, preemptor, snapshot, p.reader)
+			if rejectAll {
 				continue
 			}
 			candidateFilters = append(candidateFilters, filter)
