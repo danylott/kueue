@@ -260,7 +260,7 @@ func TestNewCandidateFilters(t *testing.T) {
 				},
 			},
 		},
-		"CandidateWorkloadPrioritySelector with invalid selector appends rejectAllWLFilter": {
+		"CandidateWorkloadPrioritySelector with invalid selector returns rejectAll true": {
 			selector: &kueue.PreemptionCandidateSelector{
 				RelationRequirement: kueue.SameClusterQueue,
 				CandidateWorkloadPrioritySelector: &metav1.LabelSelector{
@@ -269,15 +269,9 @@ func TestNewCandidateFilters(t *testing.T) {
 					},
 				},
 			},
-			preemptor: preemptorWithPC,
-			wantFilters: CandidateFilters{
-				CQFilters: []ClusterQueueFilter{
-					&sameClusterQueueFilter{preemptorCQ: "cq1"},
-				},
-				WLFilters: []WorkloadFilter{
-					&rejectAllWLFilter{},
-				},
-			},
+			preemptor:     preemptorWithPC,
+			wantFilters:   CandidateFilters{},
+			wantRejectAll: true,
 		},
 		"Full combination of all selector criteria compiles into complete CandidateFilters": {
 			selector: &kueue.PreemptionCandidateSelector{
@@ -387,7 +381,6 @@ func TestNewCandidateFilters(t *testing.T) {
 			sameCohortTreeFilter{},
 			sameLocalQueueFilter{},
 			rejectAllCQFilter{},
-			rejectAllWLFilter{},
 			numericLabelFilter{},
 			candidateWorkloadPriorityFilter{},
 			relativeWorkloadPriorityFilter{},

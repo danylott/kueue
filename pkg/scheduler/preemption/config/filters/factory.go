@@ -46,9 +46,13 @@ func NewCandidateFilters(
 		return CandidateFilters{}, true
 	}
 
+	wlPriorityFilters, ok := buildPriorityFilters(ctx, log, selector, preemptor, reader)
+	if !ok {
+		return CandidateFilters{}, true
+	}
+
 	cqRelationFilters, wlRelationFilters := buildRelationFilters(log, selector.RelationRequirement, preemptor, snapshot)
 	wlNumericFilters := buildNumericLabelFilters(log, selector.NumericLabels, preemptor)
-	wlPriorityFilters := buildPriorityFilters(ctx, log, selector, preemptor, reader)
 
 	var wlFilters []WorkloadFilter
 	wlFilters = append(wlFilters, wlRelationFilters...)
@@ -113,22 +117,23 @@ func buildPriorityFilters(
 	selector *kueue.PreemptionCandidateSelector,
 	preemptor *workload.Info,
 	reader client.Reader,
-) []WorkloadFilter {
+) ([]WorkloadFilter, bool) {
 	if selector == nil {
-		return nil
+		return nil, true
 	}
 	var filters []WorkloadFilter
 	if selector.CandidateWorkloadPrioritySelector != nil {
 		ls, err := metav1.LabelSelectorAsSelector(selector.CandidateWorkloadPrioritySelector)
 		if err != nil {
 			log.Error(err, "Invalid CandidateWorkloadPrioritySelector", "selector", selector.CandidateWorkloadPrioritySelector)
-			filters = append(filters, NewRejectAllWLFilter())
-		} else if !ls.Empty() {
+			return nil, false
+		}
+		if !ls.Empty() {
 			filters = append(filters, NewCandidateWorkloadPriorityFilter(ctx, log, ls, reader))
 		}
 	}
 	if selector.RelativeWorkloadPriority != nil {
 		filters = append(filters, NewRelativeWorkloadPriorityFilter(log, *selector.RelativeWorkloadPriority, preemptor))
 	}
-	return filters
+	return filters, true
 }

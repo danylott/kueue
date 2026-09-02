@@ -39,18 +39,6 @@ type CandidateFilters struct {
 	WLFilters []WorkloadFilter
 }
 
-// rejectAllWLFilter is a WorkloadFilter that unconditionally rejects all candidate workloads.
-type rejectAllWLFilter struct{}
-
-func (f *rejectAllWLFilter) Matches(*workload.Info) bool {
-	return false
-}
-
-// NewRejectAllWLFilter returns a WorkloadFilter that rejects all candidate workloads.
-func NewRejectAllWLFilter() WorkloadFilter {
-	return &rejectAllWLFilter{}
-}
-
 // rejectAllCQFilter is a ClusterQueueFilter that unconditionally rejects all ClusterQueues.
 type rejectAllCQFilter struct{}
 
