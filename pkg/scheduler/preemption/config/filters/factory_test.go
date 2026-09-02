@@ -150,16 +150,13 @@ func TestNewCandidateFilters(t *testing.T) {
 			preemptor:   preemptor,
 			wantFilters: CandidateFilters{},
 		},
-		"unrecognized relation requirement returns rejectAllCQFilter": {
+		"unrecognized relation requirement returns rejectAll true": {
 			selector: &kueue.PreemptionCandidateSelector{
 				RelationRequirement: kueue.PreemptionRelationConstraint("UnknownRelation"),
 			},
-			preemptor: preemptor,
-			wantFilters: CandidateFilters{
-				CQFilters: []ClusterQueueFilter{
-					&rejectAllCQFilter{},
-				},
-			},
+			preemptor:     preemptor,
+			wantFilters:   CandidateFilters{},
+			wantRejectAll: true,
 		},
 		"SameClusterQueue with empty NumericLabels produces no WorkloadFilters": {
 			selector: &kueue.PreemptionCandidateSelector{
@@ -386,7 +383,6 @@ func TestNewCandidateFilters(t *testing.T) {
 			sameCohortFilter{},
 			sameCohortTreeFilter{},
 			sameLocalQueueFilter{},
-			rejectAllCQFilter{},
 			numericLabelFilter{},
 			candidateWorkloadPriorityFilter{},
 			relativeWorkloadPriorityFilter{},

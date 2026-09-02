@@ -51,7 +51,10 @@ func NewCandidateFilters(
 		return CandidateFilters{}, true
 	}
 
-	cqRelationFilters, wlRelationFilters := buildRelationFilters(log, selector.RelationRequirement, preemptor, snapshot)
+	cqRelationFilters, wlRelationFilters, ok := buildRelationFilters(log, selector.RelationRequirement, preemptor, snapshot)
+	if !ok {
+		return CandidateFilters{}, true
+	}
 	wlNumericFilters := buildNumericLabelFilters(log, selector.NumericLabels, preemptor)
 
 	var wlFilters []WorkloadFilter
@@ -70,29 +73,29 @@ func buildRelationFilters(
 	relation kueue.PreemptionRelationConstraint,
 	preemptor *workload.Info,
 	snapshot *schdcache.Snapshot,
-) ([]ClusterQueueFilter, []WorkloadFilter) {
+) ([]ClusterQueueFilter, []WorkloadFilter, bool) {
 	switch relation {
 	case kueue.SameLocalQueue:
 		// CQ Level: Prune all other ClusterQueues
 		// WL Level: Narrow down workloads to those matching exactly same LocalQueue
 		return []ClusterQueueFilter{NewSameClusterQueueFilter(preemptor.ClusterQueue)},
-			[]WorkloadFilter{NewSameLocalQueueFilter(preemptor.Obj.Namespace, preemptor.Obj.Spec.QueueName)}
+			[]WorkloadFilter{NewSameLocalQueueFilter(preemptor.Obj.Namespace, preemptor.Obj.Spec.QueueName)}, true
 
 	case kueue.SameClusterQueue:
-		return []ClusterQueueFilter{NewSameClusterQueueFilter(preemptor.ClusterQueue)}, nil
+		return []ClusterQueueFilter{NewSameClusterQueueFilter(preemptor.ClusterQueue)}, nil, true
 
 	case kueue.SameCohort:
-		return []ClusterQueueFilter{NewSameCohortFilter(preemptor.ClusterQueue, snapshot)}, nil
+		return []ClusterQueueFilter{NewSameCohortFilter(preemptor.ClusterQueue, snapshot)}, nil, true
 
 	case kueue.SameCohortTree:
-		return []ClusterQueueFilter{NewSameCohortTreeFilter(preemptor.ClusterQueue, snapshot)}, nil
+		return []ClusterQueueFilter{NewSameCohortTreeFilter(preemptor.ClusterQueue, snapshot)}, nil, true
 
 	case kueue.AnyClusterQueue:
-		return nil, nil
+		return nil, nil, true
 
 	default:
 		log.V(3).Info("Unsupported or unhandled relation constraint evaluated; 0 candidates permitted", "relation", relation)
-		return []ClusterQueueFilter{NewRejectAllCQFilter()}, nil
+		return nil, nil, false
 	}
 }
 

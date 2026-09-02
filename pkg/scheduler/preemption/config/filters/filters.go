@@ -38,15 +38,3 @@ type CandidateFilters struct {
 	CQFilters []ClusterQueueFilter
 	WLFilters []WorkloadFilter
 }
-
-// rejectAllCQFilter is a ClusterQueueFilter that unconditionally rejects all ClusterQueues.
-type rejectAllCQFilter struct{}
-
-func (f *rejectAllCQFilter) Matches(*schdcache.ClusterQueueSnapshot) bool {
-	return false
-}
-
-// NewRejectAllCQFilter returns a ClusterQueueFilter that rejects all ClusterQueues.
-func NewRejectAllCQFilter() ClusterQueueFilter {
-	return &rejectAllCQFilter{}
-}
