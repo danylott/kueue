@@ -100,7 +100,7 @@ type PreemptionConfigSpec struct {
 	// The order will be always deterministic, as UID
 	// of the workloads is used to break the ties
 	// If not set workloads will be just ordered by UID.
-	Ordering []OrderingField `json:"ordering,omitempty"`
+	Ordering []Order `json:"ordering,omitempty"`
 }
 
 type PreemptionRuleTrigger string
@@ -198,9 +198,74 @@ type PreemptionCandidateSelector struct {
 	RelativeWorkloadPriority *RelativeConstraint `json:"relativeWorkloadPriority,omitempty"`
 }
 
+// OrderingField specifies the property of candidate workloads to sort by during preemption evaluation.
+// Supported values are:
+// - "Priority": orders workloads by effective priority (accounting for priority boost if enabled).
+//   - Ascending (default): lowest priority first.
+//   - Descending: highest priority first.
+//
+// - "AdmissionTimestamp": orders workloads by the timestamp when quota was reserved (admitted).
+//   - Ascending (default): oldest admitted workloads first.
+//   - Descending: most recently admitted workloads first.
+//
+// - "IsOtherCQ": orders workloads based on whether they belong to a different ClusterQueue than the preemptor.
+//   - Ascending (default): workloads from other ClusterQueues first, followed by same ClusterQueue.
+//   - Descending: workloads from the same ClusterQueue first, followed by other ClusterQueues.
+//
+// - "IsOtherCohort": orders workloads based on whether they belong to a different Cohort than the preemptor.
+//   - Ascending (default): workloads from other Cohorts first, followed by same Cohort.
+//   - Descending: workloads from the same Cohort first, followed by other Cohorts.
+//
+// +kubebuilder:validation:Enum=Priority;AdmissionTimestamp;IsOtherCQ;IsOtherCohort
 type OrderingField string
 
 const (
-	Priority           OrderingField = "Priority"
+	// Priority orders candidates by effective priority (accounting for priority boost if enabled).
+	// Ascending order places lowest priority candidates first.
+	Priority OrderingField = "Priority"
+
+	// AdmissionTimestamp orders candidates by the time quota was reserved.
+	// Ascending order places oldest admitted candidates first.
 	AdmissionTimestamp OrderingField = "AdmissionTimestamp"
+
+	// IsOtherCQ orders candidates based on whether their ClusterQueue differs from the preemptor.
+	// Ascending order places workloads from other ClusterQueues first.
+	IsOtherCQ OrderingField = "IsOtherCQ"
+
+	// IsOtherCohort orders candidates based on whether their direct Cohort differs from the preemptor.
+	// Ascending order places workloads from other Cohorts first.
+	IsOtherCohort OrderingField = "IsOtherCohort"
 )
+
+// OrderingDirection specifies the sort direction for a candidate ordering criterion.
+// Possible values are:
+// - "Ascending": sort in natural ascending order (default).
+// - "Descending": sort in reverse/descending order.
+//
+// +kubebuilder:validation:Enum=Ascending;Descending
+type OrderingDirection string
+
+const (
+	// Ascending sorts candidate workloads in natural order (e.g., lowest priority first, oldest admission first, or other CQs first).
+	Ascending OrderingDirection = "Ascending"
+
+	// Descending sorts candidate workloads in reverse order (e.g., highest priority first, newest admission first, or same CQ first).
+	Descending OrderingDirection = "Descending"
+)
+
+// Order specifies a single sorting criterion and direction for ordering preemption candidates.
+// Multiple Order criteria are evaluated sequentially as a multi-key comparator chain,
+// with ties broken by Workload UID for deterministic ordering.
+type Order struct {
+	// OrderingField specifies the field to sort preemption candidates by.
+	//
+	// +kubebuilder:validation:Required
+	OrderingField OrderingField `json:"orderingField"`
+
+	// Direction specifies the sorting direction (Ascending or Descending).
+	// Defaults to Ascending if not specified.
+	//
+	// +kubebuilder:default=Ascending
+	// +optional
+	Direction OrderingDirection `json:"direction,omitempty"`
+}

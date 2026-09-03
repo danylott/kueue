@@ -648,6 +648,321 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			preemptorCq: "a",
 			wantWlOrder: []string{"a1"},
 		},
+		"ordering candidates by Priority (lower priority first)": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.Priority}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "priority-ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-high").Priority(100).SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("a2-low").Priority(10).SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("a3-mid").Priority(50).SimpleReserveQuota("a", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"a2-low", "a3-mid", "a1-high"},
+		},
+		"ordering candidates by Priority (higher priority first - Descending)": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.Priority, Direction: kueue.Descending}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "priority-desc-ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-high").Priority(100).SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("a2-low").Priority(10).SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("a3-mid").Priority(50).SimpleReserveQuota("a", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"a1-high", "a3-mid", "a2-low"},
+		},
+		"ordering candidates by AdmissionTimestamp (more recently admitted first - Descending)": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "timestamp-ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-oldest").SimpleReserveQuota("a", "default", now.Add(-10*time.Minute)).Obj(),
+				*unitWl.Clone().Name("a2-newest").SimpleReserveQuota("a", "default", now.Add(-1*time.Minute)).Obj(),
+				*unitWl.Clone().Name("a3-middle").SimpleReserveQuota("a", "default", now.Add(-5*time.Minute)).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"a2-newest", "a3-middle", "a1-oldest"},
+		},
+		"ordering candidates by AdmissionTimestamp (older admitted first - Ascending)": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Ascending}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "timestamp-asc-ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-oldest").SimpleReserveQuota("a", "default", now.Add(-10*time.Minute)).Obj(),
+				*unitWl.Clone().Name("a2-newest").SimpleReserveQuota("a", "default", now.Add(-1*time.Minute)).Obj(),
+				*unitWl.Clone().Name("a3-middle").SimpleReserveQuota("a", "default", now.Add(-5*time.Minute)).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"a1-oldest", "a3-middle", "a2-newest"},
+		},
+		"ordering candidates by IsOtherCQ (other CQ before same CQ)": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCQ}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "other-cq ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameCohortTree,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-same").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b1-other").SimpleReserveQuota("b", "default", now).Obj(),
+				*unitWl.Clone().Name("a2-same").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b2-other").SimpleReserveQuota("b", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"b1-other", "b2-other", "a1-same", "a2-same"},
+		},
+		"ordering candidates by IsOtherCQ (same CQ before other CQ - Descending)": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCQ, Direction: kueue.Descending}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "same-cq-first-ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameCohortTree,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-same").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b1-other").SimpleReserveQuota("b", "default", now).Obj(),
+				*unitWl.Clone().Name("a2-same").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b2-other").SimpleReserveQuota("b", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"a1-same", "a2-same", "b1-other", "b2-other"},
+		},
+		"ordering candidates by IsOtherCohort (other Cohort before same Cohort)": {
+			cohorts: []*kueue.Cohort{
+				utiltestingapi.MakeCohort("cohort-a").Obj(),
+				utiltestingapi.MakeCohort("cohort-b").Obj(),
+			},
+			clusterQueues: []*kueue.ClusterQueue{
+				utiltestingapi.MakeClusterQueue("cq-a").Cohort("cohort-a").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "1").Obj()).Obj(),
+				utiltestingapi.MakeClusterQueue("cq-b").Cohort("cohort-b").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "1").Obj()).Obj(),
+			},
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCohort}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "other-cohort ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.AnyClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-same-cohort").SimpleReserveQuota("cq-a", "default", now).Obj(),
+				*unitWl.Clone().Name("b1-other-cohort").SimpleReserveQuota("cq-b", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "cq-a",
+			wantWlOrder: []string{"b1-other-cohort", "a1-same-cohort"},
+		},
+		"multi-key ordering: Priority -> AdmissionTimestamp": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{
+						{OrderingField: kueue.Priority},
+						{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending},
+					},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "multi-key ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("w1-prio10-old").Priority(10).SimpleReserveQuota("a", "default", now.Add(-10*time.Minute)).Obj(),
+				*unitWl.Clone().Name("w2-prio10-new").Priority(10).SimpleReserveQuota("a", "default", now.Add(-1*time.Minute)).Obj(),
+				*unitWl.Clone().Name("w3-prio20-new").Priority(20).SimpleReserveQuota("a", "default", now.Add(-1*time.Minute)).Obj(),
+				*unitWl.Clone().Name("w4-prio20-old").Priority(20).SimpleReserveQuota("a", "default", now.Add(-10*time.Minute)).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"w2-prio10-new", "w1-prio10-old", "w3-prio20-new", "w4-prio20-old"},
+		},
+		"multi-selector deduplication and simultaneous popping": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.Priority}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "rule-1",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameClusterQueue,
+								},
+								{
+									RelationRequirement: kueue.SameCohortTree,
+								},
+							},
+						},
+						{
+							Name:    "rule-2",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameCohortTree,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-same-cq").Priority(10).SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b1-sibling-cq").Priority(20).SimpleReserveQuota("b", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"a1-same-cq", "b1-sibling-cq"},
+		},
+		"deep hierarchical cohort tree (4 levels) with IsOtherCohort ordering": {
+			cohorts: []*kueue.Cohort{
+				utiltestingapi.MakeCohort("root").Obj(),
+				utiltestingapi.MakeCohort("lvl1").Parent("root").Obj(),
+				utiltestingapi.MakeCohort("lvl2").Parent("lvl1").Obj(),
+				utiltestingapi.MakeCohort("lvl3").Parent("lvl2").Obj(),
+				utiltestingapi.MakeCohort("lvl1-sib").Parent("root").Obj(),
+			},
+			clusterQueues: []*kueue.ClusterQueue{
+				utiltestingapi.MakeClusterQueue("cq-deep-1").Cohort("lvl3").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj(),
+				utiltestingapi.MakeClusterQueue("cq-deep-2").Cohort("lvl3").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj(),
+				utiltestingapi.MakeClusterQueue("cq-root").Cohort("root").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj(),
+				utiltestingapi.MakeClusterQueue("cq-sib-branch").Cohort("lvl1-sib").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj(),
+				utiltestingapi.MakeClusterQueue("cq-standalone").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj(),
+			},
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCohort}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "all-cohorts-rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.AnyClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("w-same-cq").SimpleReserveQuota("cq-deep-1", "default", now).Obj(),
+				*unitWl.Clone().Name("w-same-cohort-sib").SimpleReserveQuota("cq-deep-2", "default", now).Obj(),
+				*unitWl.Clone().Name("w-root-cq").SimpleReserveQuota("cq-root", "default", now).Obj(),
+				*unitWl.Clone().Name("w-sib-branch").SimpleReserveQuota("cq-sib-branch", "default", now).Obj(),
+				*unitWl.Clone().Name("w-standalone").SimpleReserveQuota("cq-standalone", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "cq-deep-1",
+			wantWlOrder: []string{"w-root-cq", "w-sib-branch", "w-standalone", "w-same-cohort-sib", "w-same-cq"},
+		},
 	}
 
 	for name, tc := range tests {
