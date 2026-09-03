@@ -26,7 +26,6 @@ import (
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
-	cmputil "sigs.k8s.io/kueue/pkg/util/cmp"
 	"sigs.k8s.io/kueue/pkg/util/priority"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
@@ -37,8 +36,8 @@ import (
 // Natural field comparisons:
 // - Priority: Natural integer comparison (cmp.Compare(prioA, prioB)).
 // - AdmissionTimestamp: Natural time comparison (timestampA.Compare(timestampB)).
-// - IsOtherCQ: Natural boolean comparison (cmputil.CompareBool(isOtherA, isOtherB)).
-// - IsOtherCohort: Natural boolean comparison (cmputil.CompareBool(isOtherCohortA, isOtherCohortB)).
+// - IsOtherCQ: Natural boolean comparison (compareBool(isOtherA, isOtherB) where false < true).
+// - IsOtherCohort: Natural boolean comparison (compareBool(isOtherCohortA, isOtherCohortB) where false < true).
 //
 // Direction handling:
 // - Ascending (default): Preserves natural comparison result.
@@ -127,13 +126,25 @@ func quotaReservationTime(wl *kueue.Workload, now time.Time) time.Time {
 func compareIsOtherCQ(a, b *workload.Info, preemptorCQName kueue.ClusterQueueReference) int {
 	isOtherA := a.ClusterQueue != preemptorCQName
 	isOtherB := b.ClusterQueue != preemptorCQName
-	return cmputil.CompareBool(isOtherA, isOtherB)
+	return compareBool(isOtherA, isOtherB)
 }
 
 func compareIsOtherCohort(a, b *workload.Info, preemptorCQName kueue.ClusterQueueReference, preemptorCohort kueue.CohortReference, hasPreemptorCohort bool, snapshot *schdcache.Snapshot) int {
 	isOtherCohortA := !isSameCohort(a, preemptorCQName, preemptorCohort, hasPreemptorCohort, snapshot)
 	isOtherCohortB := !isSameCohort(b, preemptorCQName, preemptorCohort, hasPreemptorCohort, snapshot)
-	return cmputil.CompareBool(isOtherCohortA, isOtherCohortB)
+	return compareBool(isOtherCohortA, isOtherCohortB)
+}
+
+// compareBool performs standard mathematical comparison of two boolean values
+// where false (0) is strictly less than true (1).
+func compareBool(a, b bool) int {
+	if a == b {
+		return 0
+	}
+	if !a {
+		return -1
+	}
+	return 1
 }
 
 func isSameCohort(wl *workload.Info, preemptorCQName kueue.ClusterQueueReference, preemptorCohort kueue.CohortReference, hasPreemptorCohort bool, snapshot *schdcache.Snapshot) bool {

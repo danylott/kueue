@@ -209,12 +209,12 @@ type PreemptionCandidateSelector struct {
 //   - Descending: most recently admitted workloads first.
 //
 // - "IsOtherCQ": orders workloads based on whether they belong to a different ClusterQueue than the preemptor.
-//   - Ascending (default): workloads from other ClusterQueues first, followed by same ClusterQueue.
-//   - Descending: workloads from the same ClusterQueue first, followed by other ClusterQueues.
+//   - Ascending (default): workloads from the same ClusterQueue first, followed by other ClusterQueues.
+//   - Descending: workloads from other ClusterQueues first, followed by the same ClusterQueue.
 //
 // - "IsOtherCohort": orders workloads based on whether they belong to a different Cohort than the preemptor.
-//   - Ascending (default): workloads from other Cohorts first, followed by same Cohort.
-//   - Descending: workloads from the same Cohort first, followed by other Cohorts.
+//   - Ascending (default): workloads from the same Cohort first, followed by other Cohorts.
+//   - Descending: workloads from other Cohorts first, followed by the same Cohort.
 //
 // +kubebuilder:validation:Enum=Priority;AdmissionTimestamp;IsOtherCQ;IsOtherCohort
 type OrderingField string
@@ -229,11 +229,11 @@ const (
 	AdmissionTimestamp OrderingField = "AdmissionTimestamp"
 
 	// IsOtherCQ orders candidates based on whether their ClusterQueue differs from the preemptor.
-	// Ascending order places workloads from other ClusterQueues first.
+	// Ascending order places workloads from the same ClusterQueue first.
 	IsOtherCQ OrderingField = "IsOtherCQ"
 
 	// IsOtherCohort orders candidates based on whether their direct Cohort differs from the preemptor.
-	// Ascending order places workloads from other Cohorts first.
+	// Ascending order places workloads from the same Cohort first.
 	IsOtherCohort OrderingField = "IsOtherCohort"
 )
 
@@ -246,10 +246,10 @@ const (
 type OrderingDirection string
 
 const (
-	// Ascending sorts candidate workloads in natural order (e.g., lowest priority first, oldest admission first, or other CQs first).
+	// Ascending sorts candidate workloads in natural order (e.g., lowest priority first, oldest admission first, or same CQ/Cohort first).
 	Ascending OrderingDirection = "Ascending"
 
-	// Descending sorts candidate workloads in reverse order (e.g., highest priority first, newest admission first, or same CQ first).
+	// Descending sorts candidate workloads in reverse order (e.g., highest priority first, newest admission first, or other CQ/Cohort first).
 	Descending OrderingDirection = "Descending"
 )
 

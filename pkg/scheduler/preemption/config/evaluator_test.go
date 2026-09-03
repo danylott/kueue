@@ -756,42 +756,14 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			preemptorCq: "a",
 			wantWlOrder: []string{"a1-oldest", "a3-middle", "a2-newest"},
 		},
-		"ordering candidates by IsOtherCQ (other CQ before same CQ)": {
+		"ordering candidates by IsOtherCQ (same CQ before other CQ - Ascending)": {
 			clusterQueues: baseCqs,
 			config: kueue.PreemptionConfig{
 				Spec: kueue.PreemptionConfigSpec{
 					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCQ}},
 					Rules: []kueue.PreemptionRule{
 						{
-							Name:    "other-cq ordering rule",
-							Trigger: kueue.InsufficientQuota,
-							Candidates: []kueue.PreemptionCandidateSelector{
-								{
-									RelationRequirement: kueue.SameCohortTree,
-								},
-							},
-						},
-					},
-				},
-			},
-			admitted: []kueue.Workload{
-				*unitWl.Clone().Name("a1-same").SimpleReserveQuota("a", "default", now).Obj(),
-				*unitWl.Clone().Name("b1-other").SimpleReserveQuota("b", "default", now).Obj(),
-				*unitWl.Clone().Name("a2-same").SimpleReserveQuota("a", "default", now).Obj(),
-				*unitWl.Clone().Name("b2-other").SimpleReserveQuota("b", "default", now).Obj(),
-			},
-			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
-			preemptorCq: "a",
-			wantWlOrder: []string{"b1-other", "b2-other", "a1-same", "a2-same"},
-		},
-		"ordering candidates by IsOtherCQ (same CQ before other CQ - Descending)": {
-			clusterQueues: baseCqs,
-			config: kueue.PreemptionConfig{
-				Spec: kueue.PreemptionConfigSpec{
-					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCQ, Direction: kueue.Descending}},
-					Rules: []kueue.PreemptionRule{
-						{
-							Name:    "same-cq-first-ordering rule",
+							Name:    "same-cq-asc ordering rule",
 							Trigger: kueue.InsufficientQuota,
 							Candidates: []kueue.PreemptionCandidateSelector{
 								{
@@ -812,7 +784,35 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			preemptorCq: "a",
 			wantWlOrder: []string{"a1-same", "a2-same", "b1-other", "b2-other"},
 		},
-		"ordering candidates by IsOtherCohort (other Cohort before same Cohort)": {
+		"ordering candidates by IsOtherCQ (other CQ before same CQ - Descending)": {
+			clusterQueues: baseCqs,
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCQ, Direction: kueue.Descending}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "other-cq-desc ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.SameCohortTree,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-same").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b1-other").SimpleReserveQuota("b", "default", now).Obj(),
+				*unitWl.Clone().Name("a2-same").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b2-other").SimpleReserveQuota("b", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "a",
+			wantWlOrder: []string{"b1-other", "b2-other", "a1-same", "a2-same"},
+		},
+		"ordering candidates by IsOtherCohort (other Cohort before same Cohort - Descending)": {
 			cohorts: []*kueue.Cohort{
 				utiltestingapi.MakeCohort("cohort-a").Obj(),
 				utiltestingapi.MakeCohort("cohort-b").Obj(),
@@ -825,7 +825,7 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			},
 			config: kueue.PreemptionConfig{
 				Spec: kueue.PreemptionConfigSpec{
-					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCohort}},
+					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCohort, Direction: kueue.Descending}},
 					Rules: []kueue.PreemptionRule{
 						{
 							Name:    "other-cohort ordering rule",
@@ -846,6 +846,41 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "cq-a",
 			wantWlOrder: []string{"b1-other-cohort", "a1-same-cohort"},
+		},
+		"ordering candidates by IsOtherCohort (same Cohort before other Cohort - Ascending)": {
+			cohorts: []*kueue.Cohort{
+				utiltestingapi.MakeCohort("cohort-a").Obj(),
+				utiltestingapi.MakeCohort("cohort-b").Obj(),
+			},
+			clusterQueues: []*kueue.ClusterQueue{
+				utiltestingapi.MakeClusterQueue("cq-a").Cohort("cohort-a").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "1").Obj()).Obj(),
+				utiltestingapi.MakeClusterQueue("cq-b").Cohort("cohort-b").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "1").Obj()).Obj(),
+			},
+			config: kueue.PreemptionConfig{
+				Spec: kueue.PreemptionConfigSpec{
+					Ordering: []kueue.Order{{OrderingField: kueue.IsOtherCohort, Direction: kueue.Ascending}},
+					Rules: []kueue.PreemptionRule{
+						{
+							Name:    "same-cohort ordering rule",
+							Trigger: kueue.InsufficientQuota,
+							Candidates: []kueue.PreemptionCandidateSelector{
+								{
+									RelationRequirement: kueue.AnyClusterQueue,
+								},
+							},
+						},
+					},
+				},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1-same-cohort").SimpleReserveQuota("cq-a", "default", now).Obj(),
+				*unitWl.Clone().Name("b1-other-cohort").SimpleReserveQuota("cq-b", "default", now).Obj(),
+			},
+			preemptorWl: unitWl.Clone().Name("a-incoming").Condition(insufficientQuotaCond).Obj(),
+			preemptorCq: "cq-a",
+			wantWlOrder: []string{"a1-same-cohort", "b1-other-cohort"},
 		},
 		"multi-key ordering: Priority -> AdmissionTimestamp": {
 			clusterQueues: baseCqs,
@@ -961,7 +996,7 @@ func TestPreemptionEvaluatorIter(t *testing.T) {
 			},
 			preemptorWl: unitWl.Clone().Name("incoming").Condition(insufficientQuotaCond).Obj(),
 			preemptorCq: "cq-deep-1",
-			wantWlOrder: []string{"w-root-cq", "w-sib-branch", "w-standalone", "w-same-cohort-sib", "w-same-cq"},
+			wantWlOrder: []string{"w-same-cohort-sib", "w-same-cq", "w-root-cq", "w-sib-branch", "w-standalone"},
 		},
 	}
 

@@ -46,7 +46,32 @@ spec:
                   of the workloads is used to break the ties
                   If not set workloads will be just ordered by UID.
                 items:
-                  type: string
+                  description: |-
+                    Order specifies a single sorting criterion and direction for ordering preemption candidates.
+                    Multiple Order criteria are evaluated sequentially as a multi-key comparator chain,
+                    with ties broken by Workload UID for deterministic ordering.
+                  properties:
+                    direction:
+                      default: Ascending
+                      description: |-
+                        Direction specifies the sorting direction (Ascending or Descending).
+                        Defaults to Ascending if not specified.
+                      enum:
+                      - Ascending
+                      - Descending
+                      type: string
+                    orderingField:
+                      description: OrderingField specifies the field to sort preemption
+                        candidates by.
+                      enum:
+                      - Priority
+                      - AdmissionTimestamp
+                      - IsOtherCQ
+                      - IsOtherCohort
+                      type: string
+                  required:
+                  - orderingField
+                  type: object
                 type: array
               rules:
                 description: Rules to select preemption candidates.

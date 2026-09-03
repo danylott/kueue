@@ -24,6 +24,10 @@ import (
 
 // OrderApplyConfiguration represents a declarative configuration of the Order type for use
 // with apply.
+//
+// Order specifies a single sorting criterion and direction for ordering preemption candidates.
+// Multiple Order criteria are evaluated sequentially as a multi-key comparator chain,
+// with ties broken by Workload UID for deterministic ordering.
 type OrderApplyConfiguration struct {
 	// OrderingField specifies the field to sort preemption candidates by.
 	OrderingField *kueuev1beta2.OrderingField `json:"orderingField,omitempty"`
