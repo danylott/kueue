@@ -21,11 +21,10 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
+	"sigs.k8s.io/kueue/pkg/scheduler/preemption/common"
 	"sigs.k8s.io/kueue/pkg/util/priority"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
@@ -35,9 +34,9 @@ var defaultOrdering = []kueue.Order{
 	{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending},
 }
 
-// CompareCandidates compares two candidate workloads according to the configured ordering rules,
-// using Workload UID comparison as a deterministic tie-breaker.
-// If ordering is empty, it falls back to the default ordering:
+// NewComparator returns a comparator function that compares two candidate workloads
+// according to the configured ordering rules and UID tie-breaking. If ordering is empty,
+// it defaults to:
 // 1. Priority (Ascending: lowest priority first)
 // 2. AdmissionTimestamp (Descending: most recently admitted first, protecting long-running workloads)
 // 3. UID (Ascending: deterministic tie-breaker)
@@ -54,23 +53,6 @@ var defaultOrdering = []kueue.Order{
 //
 // Deterministic tie-breaker:
 // - Workload UID comparison (cmp.Compare(a.Obj.UID, b.Obj.UID)).
-func CompareCandidates(
-	log logr.Logger,
-	ordering []kueue.Order,
-	a, b *workload.Info,
-	preemptor *workload.Info,
-	snapshot *schdcache.Snapshot,
-	now time.Time,
-) int {
-	return NewComparator(log, ordering, preemptor, snapshot, now)(a, b)
-}
-
-// NewComparator returns a comparator function that compares two candidate workloads
-// according to the configured ordering rules and UID tie-breaking. If ordering is empty,
-// it defaults to:
-// 1. Priority (Ascending: lowest priority first)
-// 2. AdmissionTimestamp (Descending: most recently admitted first, protecting long-running workloads)
-// 3. UID (Ascending: deterministic tie-breaker)
 //
 // Preemptor CQ and Cohort lookups are cached within the closure for efficiency.
 func NewComparator(
@@ -128,17 +110,9 @@ func comparePriority(log logr.Logger, a, b *workload.Info) int {
 }
 
 func compareAdmissionTimestamp(a, b *workload.Info, now time.Time) int {
-	timestampA := quotaReservationTime(a.Obj, now)
-	timestampB := quotaReservationTime(b.Obj, now)
+	timestampA := common.QuotaReservationTime(a.Obj, now)
+	timestampB := common.QuotaReservationTime(b.Obj, now)
 	return timestampA.Compare(timestampB)
-}
-
-func quotaReservationTime(wl *kueue.Workload, now time.Time) time.Time {
-	cond := meta.FindStatusCondition(wl.Status.Conditions, kueue.WorkloadQuotaReserved)
-	if cond == nil || cond.Status != metav1.ConditionTrue {
-		return now
-	}
-	return cond.LastTransitionTime.Time
 }
 
 func compareIsOtherCQ(a, b *workload.Info, preemptorCQName kueue.ClusterQueueReference) int {
@@ -155,6 +129,7 @@ func compareIsOtherCohort(a, b *workload.Info, preemptorCQName kueue.ClusterQueu
 
 // compareBool performs standard mathematical comparison of two boolean values
 // where false (0) is strictly less than true (1).
+// TODO: Replace with cmputil.CompareBool once synced with upstream (https://github.com/kubernetes-sigs/kueue/issues/15118).
 func compareBool(a, b bool) int {
 	if a == b {
 		return 0

@@ -67,11 +67,6 @@ func (q *CandidateQueue) SelectorIndex() int {
 	return q.selectorIndex
 }
 
-// ClusterQueue returns the ClusterQueue reference this queue belongs to.
-func (q *CandidateQueue) ClusterQueue() kueue.ClusterQueueReference {
-	return q.clusterQueue
-}
-
 // Peek returns the workload at the front of the queue without removing it.
 // Returns nil if the queue is empty.
 func (q *CandidateQueue) Peek() *workload.Info {
@@ -92,23 +87,15 @@ func (q *CandidateQueue) Pop() *workload.Info {
 	return wl
 }
 
-// IsEmpty returns true if the queue has no more candidates.
-func (q *CandidateQueue) IsEmpty() bool {
+// isEmpty returns true if the queue has no more candidates.
+func (q *CandidateQueue) isEmpty() bool {
 	return q.cursor >= len(q.candidates)
 }
 
-// Len returns the number of remaining candidates in the queue.
-func (q *CandidateQueue) Len() int {
+// len returns the number of remaining candidates in the queue.
+func (q *CandidateQueue) len() int {
 	if q.cursor >= len(q.candidates) {
 		return 0
 	}
 	return len(q.candidates) - q.cursor
-}
-
-// Candidates returns the remaining candidates in the queue.
-func (q *CandidateQueue) Candidates() []*workload.Info {
-	if q.cursor >= len(q.candidates) {
-		return nil
-	}
-	return q.candidates[q.cursor:]
 }

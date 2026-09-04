@@ -220,27 +220,27 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 				t.Errorf("Provenance mismatch (-want +got):\n%s", diff)
 			}
 
-			// Also verify GetProvenance for each workload
+			// Also verify Provenance lookup for each workload
 			for uid, wantOrigins := range tc.wantProvenance {
-				gotOrigins := it.GetProvenance(uid)
+				gotOrigins := it.Provenance()[uid]
 				if diff := gocmp.Diff(wantOrigins, gotOrigins); diff != "" {
-					t.Errorf("GetProvenance(%s) mismatch (-want +got):\n%s", uid, diff)
+					t.Errorf("Provenance[%s] mismatch (-want +got):\n%s", uid, diff)
 				}
 			}
 		})
 	}
 
-	t.Run("Next step-by-step queue draining and head state", func(t *testing.T) {
+	t.Run("next step-by-step queue draining and head state", func(t *testing.T) {
 		qR1S0 := NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w1, w3}, prioCmp)
 		qR1S1 := NewCandidateQueue("rule-1", 1, "cq-a", []*workload.Info{w1}, prioCmp)
 		qR2S0 := NewCandidateQueue("rule-2", 0, "cq-a", []*workload.Info{w1, w2}, prioCmp)
 
 		it := NewMultiQueueCandidateIterator([]*CandidateQueue{qR1S0, qR1S1, qR2S0}, prioCmp)
 
-		// 1. First Next() should return w1 and pop it from all 3 queues
-		wl1, origins1, ok1 := it.Next()
+		// 1. First next() should return w1 and pop it from all 3 queues
+		wl1, origins1, ok1 := it.next()
 		if !ok1 || wl1 != w1 {
-			t.Fatalf("First Next() = %v, %v, want w1, true", wl1, ok1)
+			t.Fatalf("First next() = %v, %v, want w1, true", wl1, ok1)
 		}
 		wantOrigins1 := []RuleSelectorOrigin{
 			{RuleName: "rule-1", SelectorIndex: 0},
@@ -260,10 +260,10 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			t.Errorf("qR2S0 head after pop = %v, want w2", qR2S0.Peek())
 		}
 
-		// 2. Second Next() should pick w2 (prio 20) over w3 (prio 30)
-		wl2, origins2, ok2 := it.Next()
+		// 2. Second next() should pick w2 (prio 20) over w3 (prio 30)
+		wl2, origins2, ok2 := it.next()
 		if !ok2 || wl2 != w2 {
-			t.Fatalf("Second Next() = %v, %v, want w2, true", wl2, ok2)
+			t.Fatalf("Second next() = %v, %v, want w2, true", wl2, ok2)
 		}
 		wantOrigins2 := []RuleSelectorOrigin{
 			{RuleName: "rule-2", SelectorIndex: 0},
@@ -272,10 +272,10 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			t.Errorf("w2 origins mismatch (-want +got):\n%s", diff)
 		}
 
-		// 3. Third Next() should pick w3 (prio 30)
-		wl3, origins3, ok3 := it.Next()
+		// 3. Third next() should pick w3 (prio 30)
+		wl3, origins3, ok3 := it.next()
 		if !ok3 || wl3 != w3 {
-			t.Fatalf("Third Next() = %v, %v, want w3, true", wl3, ok3)
+			t.Fatalf("Third next() = %v, %v, want w3, true", wl3, ok3)
 		}
 		wantOrigins3 := []RuleSelectorOrigin{
 			{RuleName: "rule-1", SelectorIndex: 0},
@@ -284,10 +284,10 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			t.Errorf("w3 origins mismatch (-want +got):\n%s", diff)
 		}
 
-		// 4. Fourth Next() should return false (all drained)
-		wl4, _, ok4 := it.Next()
+		// 4. Fourth next() should return false (all drained)
+		wl4, _, ok4 := it.next()
 		if ok4 || wl4 != nil {
-			t.Errorf("Fourth Next() = %v, %v, want nil, false", wl4, ok4)
+			t.Errorf("Fourth next() = %v, %v, want nil, false", wl4, ok4)
 		}
 	})
 
@@ -306,8 +306,8 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 		if count != 2 {
 			t.Errorf("Halted after %d items, want 2", count)
 		}
-		if q.Len() != 2 {
-			t.Errorf("Remaining items in queue = %d, want 2", q.Len())
+		if q.len() != 2 {
+			t.Errorf("Remaining items in queue = %d, want 2", q.len())
 		}
 	})
 

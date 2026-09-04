@@ -57,14 +57,14 @@ func TestCandidateQueue(t *testing.T) {
 		if q.SelectorIndex() != 0 {
 			t.Errorf("SelectorIndex() = %v, want 0", q.SelectorIndex())
 		}
-		if q.ClusterQueue() != "cq-test" {
-			t.Errorf("ClusterQueue() = %v, want cq-test", q.ClusterQueue())
+		if q.clusterQueue != "cq-test" {
+			t.Errorf("clusterQueue = %v, want cq-test", q.clusterQueue)
 		}
-		if q.Len() != 3 {
-			t.Errorf("Len() = %d, want 3", q.Len())
+		if q.len() != 3 {
+			t.Errorf("len() = %d, want 3", q.len())
 		}
-		if q.IsEmpty() {
-			t.Errorf("IsEmpty() = true, want false")
+		if q.isEmpty() {
+			t.Errorf("isEmpty() = true, want false")
 		}
 
 		// Peek should see lowest priority first (w1)
@@ -80,8 +80,8 @@ func TestCandidateQueue(t *testing.T) {
 		if got := q.Pop(); got != w1 {
 			t.Errorf("Pop() = %v, want w1", got)
 		}
-		if q.Len() != 2 {
-			t.Errorf("Len() after 1 pop = %d, want 2", q.Len())
+		if q.len() != 2 {
+			t.Errorf("len() after 1 pop = %d, want 2", q.len())
 		}
 
 		// Pop w2
@@ -95,11 +95,11 @@ func TestCandidateQueue(t *testing.T) {
 		}
 
 		// Now empty
-		if !q.IsEmpty() {
-			t.Errorf("IsEmpty() after draining = false, want true")
+		if !q.isEmpty() {
+			t.Errorf("isEmpty() after draining = false, want true")
 		}
-		if q.Len() != 0 {
-			t.Errorf("Len() after draining = %d, want 0", q.Len())
+		if q.len() != 0 {
+			t.Errorf("len() after draining = %d, want 0", q.len())
 		}
 		if got := q.Peek(); got != nil {
 			t.Errorf("Peek() on empty queue = %v, want nil", got)
@@ -111,11 +111,11 @@ func TestCandidateQueue(t *testing.T) {
 
 	t.Run("empty queue handling", func(t *testing.T) {
 		q := NewCandidateQueue("rule-1", 1, "cq-empty", nil, prioCmp)
-		if !q.IsEmpty() {
-			t.Errorf("IsEmpty() = false, want true")
+		if !q.isEmpty() {
+			t.Errorf("isEmpty() = false, want true")
 		}
-		if q.Len() != 0 {
-			t.Errorf("Len() = %d, want 0", q.Len())
+		if q.len() != 0 {
+			t.Errorf("len() = %d, want 0", q.len())
 		}
 		if got := q.Peek(); got != nil {
 			t.Errorf("Peek() = %v, want nil", got)
@@ -123,8 +123,8 @@ func TestCandidateQueue(t *testing.T) {
 		if got := q.Pop(); got != nil {
 			t.Errorf("Pop() = %v, want nil", got)
 		}
-		if got := q.Candidates(); len(got) != 0 {
-			t.Errorf("Candidates() = %v, want empty", got)
+		if len(q.candidates[q.cursor:]) != 0 {
+			t.Errorf("candidates len = %v, want 0", len(q.candidates[q.cursor:]))
 		}
 	})
 
@@ -141,19 +141,19 @@ func TestCandidateQueue(t *testing.T) {
 		}
 	})
 
-	t.Run("Candidates returns remaining items", func(t *testing.T) {
+	t.Run("candidates slice returns remaining items", func(t *testing.T) {
 		q := NewCandidateQueue("rule-1", 0, "cq-test", []*workload.Info{w3, w1, w2}, prioCmp)
-		if diff := gocmp.Diff([]*workload.Info{w1, w2, w3}, q.Candidates(), cmpopts.EquateEmpty()); diff != "" {
-			t.Errorf("Candidates() mismatch (-want +got):\n%s", diff)
+		if diff := gocmp.Diff([]*workload.Info{w1, w2, w3}, q.candidates[q.cursor:], cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("candidates mismatch (-want +got):\n%s", diff)
 		}
 		q.Pop()
-		if diff := gocmp.Diff([]*workload.Info{w2, w3}, q.Candidates(), cmpopts.EquateEmpty()); diff != "" {
-			t.Errorf("Candidates() after pop mismatch (-want +got):\n%s", diff)
+		if diff := gocmp.Diff([]*workload.Info{w2, w3}, q.candidates[q.cursor:], cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("candidates after pop mismatch (-want +got):\n%s", diff)
 		}
 		q.Pop()
 		q.Pop()
-		if got := q.Candidates(); len(got) != 0 {
-			t.Errorf("Candidates() after draining = %v, want empty", got)
+		if len(q.candidates[q.cursor:]) != 0 {
+			t.Errorf("candidates after draining = %v, want empty", q.candidates[q.cursor:])
 		}
 	})
 }

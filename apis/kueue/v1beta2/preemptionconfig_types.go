@@ -208,8 +208,8 @@ type PreemptionCandidateSelector struct {
 //   - Descending: highest priority first.
 //
 // - "AdmissionTimestamp": orders workloads by the timestamp when quota was reserved (admitted).
-//   - Ascending (default): oldest admitted workloads first.
-//   - Descending: most recently admitted workloads first.
+//   - Ascending (default): oldest admitted workloads first and most recently admitted last.
+//   - Descending: most recently admitted workloads first and oldest admitted last.
 //
 // - "IsOtherCQ": orders workloads based on whether they belong to a different ClusterQueue than the preemptor.
 //   - Ascending (default): workloads from the same ClusterQueue first, followed by other ClusterQueues.
@@ -228,7 +228,7 @@ const (
 	Priority OrderingField = "Priority"
 
 	// AdmissionTimestamp orders candidates by the time quota was reserved.
-	// Ascending order places oldest admitted candidates first.
+	// Ascending order places oldest admitted candidates first and most recently admitted last.
 	AdmissionTimestamp OrderingField = "AdmissionTimestamp"
 
 	// IsOtherCQ orders candidates based on whether their ClusterQueue differs from the preemptor.

@@ -55,10 +55,10 @@ func NewMultiQueueCandidateIterator(
 	}
 }
 
-// Next selects and returns the globally minimal candidate across all active queue heads,
+// next selects and returns the globally minimal candidate across all active queue heads,
 // popping it simultaneously from all matching queue heads and recording provenance.
 // Returns (nil, nil, false) if no candidates remain in any active queue.
-func (it *MultiQueueCandidateIterator) Next() (*workload.Info, []RuleSelectorOrigin, bool) {
+func (it *MultiQueueCandidateIterator) next() (*workload.Info, []RuleSelectorOrigin, bool) {
 	var minWl *workload.Info
 
 	for _, q := range it.queues {
@@ -105,7 +105,7 @@ func isSameWorkload(a, b *workload.Info) bool {
 func (it *MultiQueueCandidateIterator) Seq() iter.Seq[*workload.Info] {
 	return func(yield func(*workload.Info) bool) {
 		for {
-			wl, _, ok := it.Next()
+			wl, _, ok := it.next()
 			if !ok {
 				return
 			}
@@ -114,11 +114,6 @@ func (it *MultiQueueCandidateIterator) Seq() iter.Seq[*workload.Info] {
 			}
 		}
 	}
-}
-
-// GetProvenance returns the recorded origins for a given workload UID.
-func (it *MultiQueueCandidateIterator) GetProvenance(uid types.UID) []RuleSelectorOrigin {
-	return it.provenance[uid]
 }
 
 // Provenance returns all captured provenance mappings.
