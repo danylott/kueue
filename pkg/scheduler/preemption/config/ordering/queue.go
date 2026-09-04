@@ -23,9 +23,8 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// CandidateQueue represents a priority queue of preemption candidate workloads
-// partitioned by (CandidateSelector, ClusterQueue).
-// Static intra-queue sorting is performed once at initialization.
+// CandidateQueue represents a queue of preemption candidate workloads
+// partitioned by (CandidateSelector, ClusterQueue), sorted once at initialization.
 type CandidateQueue struct {
 	ruleName      string
 	selectorIndex int
@@ -34,8 +33,8 @@ type CandidateQueue struct {
 	cursor        int
 }
 
-// NewCandidateQueue creates and initializes a CandidateQueue, sorting the candidates
-// once using the provided comparator.
+// NewCandidateQueue creates and initializes a CandidateQueue, sorting candidates in place
+// using the provided comparator.
 func NewCandidateQueue(
 	ruleName string,
 	selectorIndex int,
@@ -43,16 +42,15 @@ func NewCandidateQueue(
 	candidates []*workload.Info,
 	cmp func(a, b *workload.Info) int,
 ) *CandidateQueue {
-	sortedCandidates := slices.Clone(candidates)
 	if cmp == nil {
 		cmp = compareUID
 	}
-	slices.SortFunc(sortedCandidates, cmp)
+	slices.SortFunc(candidates, cmp)
 	return &CandidateQueue{
 		ruleName:      ruleName,
 		selectorIndex: selectorIndex,
 		clusterQueue:  clusterQueue,
-		candidates:    sortedCandidates,
+		candidates:    candidates,
 		cursor:        0,
 	}
 }

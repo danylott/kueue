@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -30,6 +29,7 @@ import (
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/features"
+	configtesting "sigs.k8s.io/kueue/pkg/scheduler/preemption/config/testing"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -74,56 +74,34 @@ func TestCompareCandidates(t *testing.T) {
 		return info
 	}
 
-	ctx, log := utiltesting.ContextWithLog(t)
+	_, log := utiltesting.ContextWithLog(t)
 
-	setupSnapshot := func(t *testing.T) *schdcache.Snapshot {
-		cl := utiltesting.NewClientBuilder().Build()
-		cqCache := schdcache.New(cl)
-		cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
+	// Cohort structure:
+	// rootA
+	//  ├── cq-a1
+	//  ├── cq-a3 (sibling in rootA)
+	//  └── subA
+	//       └── cq-a2
+	// rootB
+	//  └── cq-b1
+	// standalone-cq (no cohort)
+	snap := configtesting.NewSnapshotBuilder().
+		Cohort("rootA", "").
+		Cohort("subA", "rootA").
+		Cohort("rootB", "").
+		ClusterQueue("cq-a1", "rootA").
+		ClusterQueue("cq-a3", "rootA").
+		ClusterQueue("cq-a2", "subA").
+		ClusterQueue("cq-b1", "rootB").
+		ClusterQueue("standalone-cq", "").
+		Build()
 
-		// Cohort structure:
-		// rootA
-		//  ├── cq-a1
-		//  ├── cq-a3 (sibling in rootA)
-		//  └── subA
-		//       └── cq-a2
-		// rootB
-		//  └── cq-b1
-		// standalone-cq (no cohort)
+	const (
+		wantLess    = -1 // a comes before b
+		wantEqual   = 0  // a and b have equal precedence
+		wantGreater = 1  // a comes after b
+	)
 
-		rootA := utiltestingapi.MakeCohort("rootA").Obj()
-		subA := utiltestingapi.MakeCohort("subA").Parent("rootA").Obj()
-		rootB := utiltestingapi.MakeCohort("rootB").Obj()
-
-		_ = cqCache.AddOrUpdateCohort(rootA)
-		_ = cqCache.AddOrUpdateCohort(subA)
-		_ = cqCache.AddOrUpdateCohort(rootB)
-
-		cqA1 := utiltestingapi.MakeClusterQueue("cq-a1").Cohort("rootA").
-			ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-		cqA3 := utiltestingapi.MakeClusterQueue("cq-a3").Cohort("rootA").
-			ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-		cqA2 := utiltestingapi.MakeClusterQueue("cq-a2").Cohort("subA").
-			ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-		cqB1 := utiltestingapi.MakeClusterQueue("cq-b1").Cohort("rootB").
-			ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-		cqStandalone := utiltestingapi.MakeClusterQueue("standalone-cq").
-			ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-
-		_ = cqCache.AddClusterQueue(ctx, cqA1)
-		_ = cqCache.AddClusterQueue(ctx, cqA3)
-		_ = cqCache.AddClusterQueue(ctx, cqA2)
-		_ = cqCache.AddClusterQueue(ctx, cqB1)
-		_ = cqCache.AddClusterQueue(ctx, cqStandalone)
-
-		snap, err := cqCache.Snapshot(ctx)
-		if err != nil {
-			t.Fatalf("Failed to create snapshot: %v", err)
-		}
-		return snap
-	}
-
-	snap := setupSnapshot(t)
 	preemptor := baseWorkload("preemptor", "p-uid", "cq-a1")
 
 	tests := map[string]struct {
@@ -132,7 +110,7 @@ func TestCompareCandidates(t *testing.T) {
 		b         *workload.Info
 		preemptor *workload.Info
 		snapshot  *schdcache.Snapshot
-		want      int // negative: a < b, positive: a > b, zero: a == b
+		want      int
 	}{
 		"same workload identity comparison returns 0": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority}},
@@ -140,7 +118,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         preemptor,
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      0,
+			want:      wantEqual,
 		},
 		"Priority Ascending (default): lower priority comes first (a < b)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority}},
@@ -148,7 +126,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 20),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"Priority Ascending (default): lower priority comes first (a > b)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority}},
@@ -156,7 +134,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 50),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1,
+			want:      wantGreater,
 		},
 		"Priority Ascending (explicit): lower priority comes first": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority, Direction: kueue.Ascending}},
@@ -164,7 +142,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 20),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"Priority Descending: higher priority comes first (a < b)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority, Direction: kueue.Descending}},
@@ -172,7 +150,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 20),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1,
+			want:      wantGreater,
 		},
 		"Priority Descending: higher priority comes first (a > b)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority, Direction: kueue.Descending}},
@@ -180,7 +158,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 50),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"Priority Ascending: priority boost is respected": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority}},
@@ -188,7 +166,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 50),                           // effective 50
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1, // b has lower priority, so b comes first
+			want:      wantGreater, // b has lower priority, so b comes first
 		},
 		"Priority Descending: priority boost is respected": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority, Direction: kueue.Descending}},
@@ -196,7 +174,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 50),                           // effective 50
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // a has higher priority (110 vs 50), so a comes first
+			want:      wantLess, // a has higher priority (110 vs 50), so a comes first
 		},
 		"AdmissionTimestamp Ascending (default): older admission comes first (t1 < t3)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.AdmissionTimestamp}},
@@ -204,7 +182,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(baseWorkload("b", "same-uid", "cq-a1"), t3), // more recent
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"AdmissionTimestamp Ascending (explicit): older admission comes first (t3 > t1)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Ascending}},
@@ -212,7 +190,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(baseWorkload("b", "same-uid", "cq-a1"), t1), // older
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1,
+			want:      wantGreater,
 		},
 		"AdmissionTimestamp Descending: more recently admitted comes first (t3 > t1)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending}},
@@ -220,7 +198,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(baseWorkload("b", "same-uid", "cq-a1"), t1), // older
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"AdmissionTimestamp Descending: older comes after (t1 < t2)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending}},
@@ -228,7 +206,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(baseWorkload("b", "same-uid", "cq-a1"), t2), // more recent
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1,
+			want:      wantGreater,
 		},
 		"AdmissionTimestamp Ascending: missing condition falls back to now (older t1 < now)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.AdmissionTimestamp}},
@@ -236,7 +214,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(baseWorkload("b", "same-uid", "cq-a1"), t1), // older
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1, // b is older (t1 < now) -> b comes first (a > b)
+			want:      wantGreater, // b is older (t1 < now) -> b comes first (a > b)
 		},
 		"AdmissionTimestamp Descending: missing condition falls back to now (now > older t1)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending}},
@@ -244,7 +222,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(baseWorkload("b", "same-uid", "cq-a1"), t1), // older
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // a was just admitted (now > t1) -> a comes first
+			want:      wantLess, // a was just admitted (now > t1) -> a comes first
 		},
 		"AdmissionTimestamp: ConditionFalse treated as unreserved (now)": {
 			ordering: []kueue.Order{{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending}},
@@ -260,7 +238,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(baseWorkload("b", "same-uid", "cq-a1"), t1), // True condition at t1
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // a has False condition -> treated as now (now > t1) -> a comes first in Descending
+			want:      wantLess, // a has False condition -> treated as now (now > t1) -> a comes first in Descending
 		},
 		"IsOtherCQ Ascending (default): same CQ before other CQ": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCQ}},
@@ -268,7 +246,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "cq-b1"), // other CQ (true)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"IsOtherCQ Ascending (default): other CQ after same CQ": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCQ}},
@@ -276,7 +254,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "cq-a1"), // same CQ as preemptor (false)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1,
+			want:      wantGreater,
 		},
 		"IsOtherCQ Descending: other CQ before same CQ": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCQ, Direction: kueue.Descending}},
@@ -284,7 +262,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "cq-a1"), // same CQ as preemptor (false)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"IsOtherCQ Descending: same CQ after other CQ": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCQ, Direction: kueue.Descending}},
@@ -292,7 +270,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "cq-b1"), // other CQ (true)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1,
+			want:      wantGreater,
 		},
 		"IsOtherCQ: both other CQs tie-break to UID": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCQ}},
@@ -300,7 +278,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "uid-2", "cq-a2"), // other CQ
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // "uid-1" < "uid-2"
+			want:      wantLess, // "uid-1" < "uid-2"
 		},
 		"IsOtherCohort Ascending (default): same cohort before other cohort (rootA vs rootB)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCohort}},
@@ -308,7 +286,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "cq-b1"), // rootB (other cohort, true)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"IsOtherCohort Ascending (default): other cohort (standalone) after same cohort (cq-a3 under rootA)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCohort}},
@@ -316,7 +294,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "cq-a3"),         // sibling CQ under rootA -> same cohort (false)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1, // b is same cohort (false < true) -> b comes first (a > b)
+			want:      wantGreater, // b is same cohort (false < true) -> b comes first (a > b)
 		},
 		"IsOtherCohort Descending: other cohort before same cohort (rootB vs rootA)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCohort, Direction: kueue.Descending}},
@@ -324,7 +302,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "cq-a1"), // rootA (same cohort, false)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"IsOtherCohort Descending: same cohort after other cohort (cq-a3 vs standalone)": {
 			ordering:  []kueue.Order{{OrderingField: kueue.IsOtherCohort, Direction: kueue.Descending}},
@@ -332,7 +310,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         baseWorkload("b", "same-uid", "standalone-cq"), // no cohort -> other cohort (true)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1, // b is other cohort -> in Descending, b comes first (a > b)
+			want:      wantGreater, // b is other cohort -> in Descending, b comes first (a > b)
 		},
 		"Deterministic Tie-breaker: UID comparison when ordering fields are equal": {
 			ordering:  []kueue.Order{{OrderingField: kueue.Priority}},
@@ -340,7 +318,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "uid-zzz", "cq-a1"), 100),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // "uid-aaa" < "uid-zzz"
+			want:      wantLess, // "uid-aaa" < "uid-zzz"
 		},
 		"Default ordering when ordering is empty: lower priority comes first (Priority Ascending)": {
 			ordering:  []kueue.Order{},
@@ -348,7 +326,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "uid-1", "cq-a1"), 20),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // 10 < 20
+			want:      wantLess, // 10 < 20
 		},
 		"Default ordering when ordering is nil: lower priority comes first (Priority Ascending)": {
 			ordering:  nil,
@@ -356,7 +334,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "uid-1", "cq-a1"), 20),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // 10 < 20
+			want:      wantLess, // 10 < 20
 		},
 		"Default ordering when ordering is empty: equal priority orders more recently admitted first (AdmissionTimestamp Descending)": {
 			ordering:  []kueue.Order{},
@@ -364,7 +342,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(withPriority(baseWorkload("b", "uid-1", "cq-a1"), 10), t1), // older
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // more recent comes first in Descending
+			want:      wantLess, // more recent comes first in Descending
 		},
 		"Default ordering when ordering is empty: equal priority and timestamp tie-breaks to UID (Ascending)": {
 			ordering:  []kueue.Order{},
@@ -372,7 +350,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(withPriority(baseWorkload("b", "uid-1", "cq-a1"), 10), t1),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      1, // "uid-2" > "uid-1"
+			want:      wantGreater, // "uid-2" > "uid-1"
 		},
 		"Multi-key chain: Priority (Ascending) -> AdmissionTimestamp (Descending) -> IsOtherCQ (Descending)": {
 			ordering: []kueue.Order{
@@ -385,7 +363,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(withPriority(baseWorkload("b", "uid-1", "cq-b1"), 100), t1),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // a is more recently admitted (t3 > t1)
+			want:      wantLess, // a is more recently admitted (t3 > t1)
 		},
 		"Multi-key chain: equal priority and admission time falls back to IsOtherCQ Descending": {
 			ordering: []kueue.Order{
@@ -397,7 +375,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(withPriority(baseWorkload("b", "uid-1", "cq-a1"), 100), t2), // same CQ (false)
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // a is other CQ (true > false -> in Descending, a comes first)
+			want:      wantLess, // a is other CQ (true > false -> in Descending, a comes first)
 		},
 		"Multi-key chain: Priority Descending -> IsOtherCQ Descending": {
 			ordering: []kueue.Order{
@@ -409,7 +387,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "uid-2", "cq-b1"), 50),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"Unknown ordering field is ignored": {
 			ordering: []kueue.Order{
@@ -420,7 +398,7 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withPriority(baseWorkload("b", "same-uid", "cq-a1"), 20),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1,
+			want:      wantLess,
 		},
 		"4-key ordering chain: IsOtherCohort (Descending) -> IsOtherCQ (Descending) -> Priority -> AdmissionTimestamp": {
 			ordering: []kueue.Order{
@@ -435,15 +413,15 @@ func TestCompareCandidates(t *testing.T) {
 			b:         withReservationTime(withPriority(baseWorkload("b", "same-uid", "cq-a1"), 100), t3),
 			preemptor: preemptor,
 			snapshot:  snap,
-			want:      -1, // both same cohort (rootA), but a is other CQ (cq-a3 vs cq-a1) -> in Descending IsOtherCQ, a comes first
+			want:      wantLess, // both same cohort (rootA), but a is other CQ (cq-a3 vs cq-a1) -> in Descending IsOtherCQ, a comes first
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := NewComparator(log, tc.ordering, tc.preemptor, tc.snapshot, now)(tc.a, tc.b)
-			if (tc.want < 0 && got >= 0) || (tc.want > 0 && got <= 0) || (tc.want == 0 && got != 0) {
-				t.Errorf("NewComparator() = %d, want sign matching %d", got, tc.want)
+			if got != tc.want {
+				t.Errorf("NewComparator() = %d, want %d", got, tc.want)
 			}
 		})
 	}
@@ -474,20 +452,11 @@ func TestCandidateSortingWithMultiKeyComparator(t *testing.T) {
 	w3 := wl("w3-prio20-new", 20, tNew, "cq-a", "uid-3")
 	w4 := wl("w4-prio20-other-cq", 20, tNew, "cq-b", "uid-4")
 
-	ctx, log := utiltesting.ContextWithLog(t)
-	cl := utiltesting.NewClientBuilder().Build()
-	cqCache := schdcache.New(cl)
-	cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
-	cqA := utiltestingapi.MakeClusterQueue("cq-a").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-	cqB := utiltestingapi.MakeClusterQueue("cq-b").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-	_ = cqCache.AddClusterQueue(ctx, cqA)
-	_ = cqCache.AddClusterQueue(ctx, cqB)
-	snap, err := cqCache.Snapshot(ctx)
-	if err != nil {
-		t.Fatalf("Failed to create snapshot: %v", err)
-	}
+	_, log := utiltesting.ContextWithLog(t)
+	snap := configtesting.NewSnapshotBuilder().
+		ClusterQueue("cq-a", "").
+		ClusterQueue("cq-b", "").
+		Build()
 
 	preemptor := wl("preemptor", 100, now, "cq-a", "uid-p")
 
@@ -548,17 +517,10 @@ func TestDefaultOrderingCandidateSorting(t *testing.T) {
 	w3 := wl("w3-prio20-old", 20, tOld, "uid-3")
 	w4 := wl("w4-prio20-new", 20, tNew, "uid-4")
 
-	ctx, log := utiltesting.ContextWithLog(t)
-	cl := utiltesting.NewClientBuilder().Build()
-	cqCache := schdcache.New(cl)
-	cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
-	cqA := utiltestingapi.MakeClusterQueue("cq-a").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-	_ = cqCache.AddClusterQueue(ctx, cqA)
-	snap, err := cqCache.Snapshot(ctx)
-	if err != nil {
-		t.Fatalf("Failed to create snapshot: %v", err)
-	}
+	_, log := utiltesting.ContextWithLog(t)
+	snap := configtesting.NewSnapshotBuilder().
+		ClusterQueue("cq-a", "").
+		Build()
 
 	preemptor := wl("preemptor", 100, now, "uid-p")
 
@@ -583,12 +545,8 @@ func TestDefaultOrderingCandidateSorting(t *testing.T) {
 }
 
 func TestDeepHierarchicalCohortComparator(t *testing.T) {
-	ctx, log := utiltesting.ContextWithLog(t)
+	_, log := utiltesting.ContextWithLog(t)
 	now := time.Now()
-
-	cl := utiltesting.NewClientBuilder().Build()
-	cqCache := schdcache.New(cl)
-	cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
 
 	// Cohort Tree: 4 levels deep
 	// Level 0: root
@@ -601,40 +559,18 @@ func TestDeepHierarchicalCohortComparator(t *testing.T) {
 	//   └── Level 1: level1-sibling (cohort: root)
 	//         └── cq-sibling-branch (cohort: level1-sibling)
 	// standalone-cq (no cohort)
-
-	root := utiltestingapi.MakeCohort("root").Obj()
-	lvl1 := utiltestingapi.MakeCohort("level1").Parent("root").Obj()
-	lvl2 := utiltestingapi.MakeCohort("level2").Parent("level1").Obj()
-	lvl3 := utiltestingapi.MakeCohort("level3").Parent("level2").Obj()
-	lvl1Sib := utiltestingapi.MakeCohort("level1-sibling").Parent("root").Obj()
-
-	_ = cqCache.AddOrUpdateCohort(root)
-	_ = cqCache.AddOrUpdateCohort(lvl1)
-	_ = cqCache.AddOrUpdateCohort(lvl2)
-	_ = cqCache.AddOrUpdateCohort(lvl3)
-	_ = cqCache.AddOrUpdateCohort(lvl1Sib)
-
-	cqDeep1 := utiltestingapi.MakeClusterQueue("cq-deep-1").Cohort("level3").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-	cqDeep2 := utiltestingapi.MakeClusterQueue("cq-deep-2").Cohort("level3").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-	cqRoot := utiltestingapi.MakeClusterQueue("cq-root").Cohort("root").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-	cqSibBranch := utiltestingapi.MakeClusterQueue("cq-sibling-branch").Cohort("level1-sibling").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-	cqStandalone := utiltestingapi.MakeClusterQueue("standalone-cq").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "10").Obj()).Obj()
-
-	_ = cqCache.AddClusterQueue(ctx, cqDeep1)
-	_ = cqCache.AddClusterQueue(ctx, cqDeep2)
-	_ = cqCache.AddClusterQueue(ctx, cqRoot)
-	_ = cqCache.AddClusterQueue(ctx, cqSibBranch)
-	_ = cqCache.AddClusterQueue(ctx, cqStandalone)
-
-	snap, err := cqCache.Snapshot(ctx)
-	if err != nil {
-		t.Fatalf("Failed to create snapshot: %v", err)
-	}
+	snap := configtesting.NewSnapshotBuilder().
+		Cohort("root", "").
+		Cohort("level1", "root").
+		Cohort("level2", "level1").
+		Cohort("level3", "level2").
+		Cohort("level1-sibling", "root").
+		ClusterQueue("cq-deep-1", "level3").
+		ClusterQueue("cq-deep-2", "level3").
+		ClusterQueue("cq-root", "root").
+		ClusterQueue("cq-sibling-branch", "level1-sibling").
+		ClusterQueue("standalone-cq", "").
+		Build()
 
 	createWl := func(name, cq, uid string) *workload.Info {
 		wl := utiltestingapi.MakeWorkload(name, "ns").

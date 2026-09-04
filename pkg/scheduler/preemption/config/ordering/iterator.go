@@ -100,8 +100,7 @@ func isSameWorkload(a, b *workload.Info) bool {
 	return a == b || a.Obj.UID == b.Obj.UID
 }
 
-// Seq returns a Go 1.23 iterator sequence (iter.Seq[*workload.Info]) yielding candidates
-// in deterministic minimal order.
+// Seq returns an iterator sequence yielding preemption candidates in configured order.
 func (it *MultiQueueCandidateIterator) Seq() iter.Seq[*workload.Info] {
 	return func(yield func(*workload.Info) bool) {
 		for {

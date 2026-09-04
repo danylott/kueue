@@ -82,9 +82,7 @@ func (p *preemptionEvaluator) buildCandidateQueues(
 	flavorsNeedPreemption sets.Set[resources.FlavorResource],
 ) ([]*ordering.CandidateQueue, func(a, b *workload.Info) int, error) {
 	cmpFunc := ordering.NewComparator(p.log, p.config.Spec.Ordering, preemptor, snapshot, p.clock.Now())
-	// Go map iteration order is non-deterministic. Sorting CQ names ensures deterministic queue instantiation
-	// and reproducible provenance origin ordering for candidates matching across multiple selectors/CQs.
-	// Hoisting this outside the rule/selector loops avoids redundant allocations and sorting per selector.
+	// Sorting CQ names ensures deterministic queue instantiation across scheduling cycles.
 	cqNames := slices.Sorted(maps.Keys(snapshot.ClusterQueues()))
 
 	var queues []*ordering.CandidateQueue
