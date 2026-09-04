@@ -63,16 +63,14 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 	w4 := createWl("w4", 40, "cq-b")
 
 	cases := map[string]struct {
-		queues         func() []*CandidateQueue
+		queues         []*CandidateQueue
 		cmp            func(a, b *workload.Info) int
 		wantOrder      []string
 		wantProvenance map[types.UID][]RuleSelectorOrigin
 	}{
 		"single queue iteration": {
-			queues: func() []*CandidateQueue {
-				return []*CandidateQueue{
-					NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w3, w1}, prioCmp),
-				}
+			queues: []*CandidateQueue{
+				NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w3, w1}, prioCmp),
 			},
 			cmp:       prioCmp,
 			wantOrder: []string{"w1", "w3"},
@@ -82,11 +80,9 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			},
 		},
 		"multi-queue interleaved ordering": {
-			queues: func() []*CandidateQueue {
-				return []*CandidateQueue{
-					NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w1, w3}, prioCmp),
-					NewCandidateQueue("rule-1", 0, "cq-b", []*workload.Info{w2, w4}, prioCmp),
-				}
+			queues: []*CandidateQueue{
+				NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w1, w3}, prioCmp),
+				NewCandidateQueue("rule-1", 0, "cq-b", []*workload.Info{w2, w4}, prioCmp),
 			},
 			cmp:       prioCmp,
 			wantOrder: []string{"w1", "w2", "w3", "w4"},
@@ -98,15 +94,13 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			},
 		},
 		"simultaneous duplicate head popping and provenance tracking": {
-			queues: func() []*CandidateQueue {
+			queues: []*CandidateQueue{
 				// w1 matches Rule 1 Selector 0, Rule 1 Selector 1, and Rule 2 Selector 0
 				// w3 matches Rule 1 Selector 0
 				// w2 matches Rule 2 Selector 0
-				return []*CandidateQueue{
-					NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w1, w3}, prioCmp),
-					NewCandidateQueue("rule-1", 1, "cq-a", []*workload.Info{w1}, prioCmp),
-					NewCandidateQueue("rule-2", 0, "cq-a", []*workload.Info{w1, w2}, prioCmp),
-				}
+				NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w1, w3}, prioCmp),
+				NewCandidateQueue("rule-1", 1, "cq-a", []*workload.Info{w1}, prioCmp),
+				NewCandidateQueue("rule-2", 0, "cq-a", []*workload.Info{w1, w2}, prioCmp),
 			},
 			cmp:       prioCmp,
 			wantOrder: []string{"w1", "w2", "w3"},
@@ -121,17 +115,11 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			},
 		},
 		"multi-queue UID tie-breaking across 4 queues": {
-			queues: func() []*CandidateQueue {
-				wA := createWl("wl-a", 10, "cq-a")
-				wB := createWl("wl-b", 10, "cq-b")
-				wC := createWl("wl-c", 10, "cq-c")
-				wD := createWl("wl-d", 10, "cq-d")
-				return []*CandidateQueue{
-					NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{wA}, prioCmp),
-					NewCandidateQueue("rule-1", 0, "cq-b", []*workload.Info{wB}, prioCmp),
-					NewCandidateQueue("rule-1", 0, "cq-c", []*workload.Info{wC}, prioCmp),
-					NewCandidateQueue("rule-1", 0, "cq-d", []*workload.Info{wD}, prioCmp),
-				}
+			queues: []*CandidateQueue{
+				NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{createWl("wl-a", 10, "cq-a")}, prioCmp),
+				NewCandidateQueue("rule-1", 0, "cq-b", []*workload.Info{createWl("wl-b", 10, "cq-b")}, prioCmp),
+				NewCandidateQueue("rule-1", 0, "cq-c", []*workload.Info{createWl("wl-c", 10, "cq-c")}, prioCmp),
+				NewCandidateQueue("rule-1", 0, "cq-d", []*workload.Info{createWl("wl-d", 10, "cq-d")}, prioCmp),
 			},
 			cmp:       prioCmp,
 			wantOrder: []string{"wl-a", "wl-b", "wl-c", "wl-d"},
@@ -143,30 +131,24 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			},
 		},
 		"empty queue handling with nil queues": {
-			queues: func() []*CandidateQueue {
-				return nil
-			},
+			queues:         nil,
 			cmp:            prioCmp,
 			wantOrder:      nil,
 			wantProvenance: map[types.UID][]RuleSelectorOrigin{},
 		},
 		"empty queue handling with empty queues list": {
-			queues: func() []*CandidateQueue {
-				return []*CandidateQueue{
-					NewCandidateQueue("rule-1", 0, "cq-a", nil, prioCmp),
-					NewCandidateQueue("rule-2", 0, "cq-b", []*workload.Info{}, prioCmp),
-				}
+			queues: []*CandidateQueue{
+				NewCandidateQueue("rule-1", 0, "cq-a", nil, prioCmp),
+				NewCandidateQueue("rule-2", 0, "cq-b", []*workload.Info{}, prioCmp),
 			},
 			cmp:            prioCmp,
 			wantOrder:      nil,
 			wantProvenance: map[types.UID][]RuleSelectorOrigin{},
 		},
 		"nil comparator fallback in iterator": {
-			queues: func() []*CandidateQueue {
-				return []*CandidateQueue{
-					NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w1, w3}, nil),
-					NewCandidateQueue("rule-1", 0, "cq-b", []*workload.Info{w2, w4}, nil),
-				}
+			queues: []*CandidateQueue{
+				NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{w1, w3}, nil),
+				NewCandidateQueue("rule-1", 0, "cq-b", []*workload.Info{w2, w4}, nil),
 			},
 			cmp:       nil,
 			wantOrder: []string{"w1", "w2", "w3", "w4"},
@@ -178,22 +160,14 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 			},
 		},
 		"deduplication across queues by UID with distinct objects": {
-			queues: func() []*CandidateQueue {
-				wlA1 := utiltestingapi.MakeWorkload("wl-a", "ns").UID("uid-a").Obj()
-				wlA2 := utiltestingapi.MakeWorkload("wl-a", "ns").UID("uid-a").Obj()
-				info1 := workload.NewInfo(wlA1)
-				info1.ClusterQueue = "cq-a"
-				info2 := workload.NewInfo(wlA2)
-				info2.ClusterQueue = "cq-a"
-				return []*CandidateQueue{
-					NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{info1}, nil),
-					NewCandidateQueue("rule-1", 1, "cq-a", []*workload.Info{info2}, nil),
-				}
+			queues: []*CandidateQueue{
+				NewCandidateQueue("rule-1", 0, "cq-a", []*workload.Info{createWl("wl-a", 10, "cq-a")}, nil),
+				NewCandidateQueue("rule-1", 1, "cq-a", []*workload.Info{createWl("wl-a", 10, "cq-a")}, nil),
 			},
 			cmp:       nil,
 			wantOrder: []string{"wl-a"},
 			wantProvenance: map[types.UID][]RuleSelectorOrigin{
-				"uid-a": {
+				"wl-a": {
 					{RuleName: "rule-1", SelectorIndex: 0},
 					{RuleName: "rule-1", SelectorIndex: 1},
 				},
@@ -203,8 +177,7 @@ func TestMultiQueueCandidateIterator(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			qs := tc.queues()
-			it := NewMultiQueueCandidateIterator(qs, tc.cmp)
+			it := NewMultiQueueCandidateIterator(tc.queues, tc.cmp)
 
 			var gotOrder []string
 			for wl := range it.Seq() {
