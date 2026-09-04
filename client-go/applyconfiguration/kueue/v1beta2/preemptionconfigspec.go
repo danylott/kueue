@@ -23,10 +23,12 @@ package v1beta2
 type PreemptionConfigSpecApplyConfiguration struct {
 	// Rules to select preemption candidates.
 	Rules []PreemptionRuleApplyConfiguration `json:"rules,omitempty"`
-	// Ordering of the preemption candidates.
-	// The order will be always deterministic, as UID
-	// of the workloads is used to break the ties
-	// If not set workloads will be just ordered by UID.
+	// Ordering of preemption candidates evaluated sequentially as a multi-key comparator chain.
+	// The order is always deterministic, as the Workload UID is used as the final tie-breaker.
+	// If not set, candidates will be ordered by default like this:
+	// 1. Priority (Ascending: lowest priority first)
+	// 2. AdmissionTimestamp (Descending: most recently admitted first, protecting long-running workloads)
+	// 3. UID (Ascending: deterministic tie-breaker)
 	Ordering []OrderApplyConfiguration `json:"ordering,omitempty"`
 }
 

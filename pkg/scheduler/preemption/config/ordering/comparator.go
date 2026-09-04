@@ -30,8 +30,17 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
+var defaultOrdering = []kueue.Order{
+	{OrderingField: kueue.Priority, Direction: kueue.Ascending},
+	{OrderingField: kueue.AdmissionTimestamp, Direction: kueue.Descending},
+}
+
 // CompareCandidates compares two candidate workloads according to the configured ordering rules,
 // using Workload UID comparison as a deterministic tie-breaker.
+// If ordering is empty, it falls back to the default ordering:
+// 1. Priority (Ascending: lowest priority first)
+// 2. AdmissionTimestamp (Descending: most recently admitted first, protecting long-running workloads)
+// 3. UID (Ascending: deterministic tie-breaker)
 //
 // Natural field comparisons:
 // - Priority: Natural integer comparison (cmp.Compare(prioA, prioB)).
@@ -57,8 +66,13 @@ func CompareCandidates(
 }
 
 // NewComparator returns a comparator function that compares two candidate workloads
-// according to the configured ordering rules and UID tie-breaking. Preemptor CQ and Cohort
-// lookups are cached within the closure for efficiency.
+// according to the configured ordering rules and UID tie-breaking. If ordering is empty,
+// it defaults to:
+// 1. Priority (Ascending: lowest priority first)
+// 2. AdmissionTimestamp (Descending: most recently admitted first, protecting long-running workloads)
+// 3. UID (Ascending: deterministic tie-breaker)
+//
+// Preemptor CQ and Cohort lookups are cached within the closure for efficiency.
 func NewComparator(
 	log logr.Logger,
 	ordering []kueue.Order,
@@ -66,6 +80,10 @@ func NewComparator(
 	snapshot *schdcache.Snapshot,
 	now time.Time,
 ) func(a, b *workload.Info) int {
+	if len(ordering) == 0 {
+		ordering = defaultOrdering
+	}
+
 	preemptorCQName := preemptor.ClusterQueue
 	var preemptorCohort kueue.CohortReference
 	var hasPreemptorCohort bool
