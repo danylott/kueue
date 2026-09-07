@@ -367,7 +367,7 @@ As the scope of the design is already broad, we leave them as a separate impleme
 
 ### Constraints
 
-- **Mutual Exclusivity & Backward Compatibility:** `ClusterQueue.spec.preemption` and `spec.preemptionConfigName` are mutually exclusive. Existing preemption behavior and configurations remain completely backward-compatible when `preemptionConfigName` is not set.
+- **Mutual Exclusivity & Backward Compatibility:** `ClusterQueue.spec.preemption` and `ClusterQueue.spec.preemptionConfigName` are mutually exclusive. Existing preemption behavior and configurations remain completely backward-compatible when `ClusterQueue.spec.preemptionConfigName` is not set.
 - **Deterministic Scheduling:** Candidate selection, victim evaluation, and tie-breaking must remain strictly deterministic across scheduling cycles (guaranteed by multi-key comparison chains and Workload UID tie-breaking).
 - **Non-mutating Evaluation:** Preemption evaluation operates strictly on cluster snapshot state and simulated usage without mutating workload specs or priorities during preemption simulation.
 - **Resource Scope:** `PreemptionConfig` and `PreemptionLimit` are cluster-scoped CRDs subject to standard Kubernetes RBAC and controller-runtime caching mechanisms.
