@@ -1,6 +1,7 @@
 # KEP-13396: Configurable Preemptions
 
 <!-- toc -->
+
 - [Summary](#summary)
 - [Motivation](#motivation)
   - [1. Defragmentation](#1-defragmentation)
@@ -10,7 +11,7 @@
   - [Goals](#goals)
   - [Non-Goals](#non-goals)
 - [Proposal](#proposal)
-    - [Referencing PreemptionConfig and Strategy Interaction](#referencing-preemptionconfig-and-strategy-interaction)
+  - [Referencing PreemptionConfig and Strategy Interaction](#referencing-preemptionconfig-and-strategy-interaction)
   - [User Stories](#user-stories)
     - [Story 1 - Defragmentation](#story-1---defragmentation)
     - [Story 2 - Hero job](#story-2---hero-job)
@@ -72,11 +73,8 @@
     - [Examples with PreemptionLimit](#examples-with-preemptionlimit)
       - [Story 1 - Global Preemption Rate Limiting](#story-1---global-preemption-rate-limiting)
       - [Story 2 - Protecting a Mission-Critical ClusterQueue from Preemption](#story-2---protecting-a-mission-critical-clusterqueue-from-preemption)
-  - [Minimum Trigger Duration (MinTriggerRequiredDuration)](#minimum-trigger-duration-mintriggerrequiredduration)
-    - [Proposed API for Minimum Trigger Duration](#proposed-api-for-minimum-trigger-duration)
-    - [Examples with Minimum Trigger Duration](#examples-with-minimum-trigger-duration)
-      - [Story 1 - Grace Period for Topology Defragmentation](#story-1---grace-period-for-topology-defragmentation)
-<!-- /toc -->
+  - [Minimum Trigger Duration (MinTriggerRequiredDuration)](#minimum-trigger-duration-mintriggerrequiredduration) - [Proposed API for Minimum Trigger Duration](#proposed-api-for-minimum-trigger-duration) - [Examples with Minimum Trigger Duration](#examples-with-minimum-trigger-duration) - [Story 1 - Grace Period for Topology Defragmentation](#story-1---grace-period-for-topology-defragmentation)
+  <!-- /toc -->
 
 ## Summary
 
@@ -632,6 +630,7 @@ type PreemptionRule struct {
 The trigger state and the first observation timestamp when a specific trigger occurred are maintained in-memory within the queue management and scheduling cache (rather than being patched as status conditions on the Workload API object). The in-memory trigger state is cleared upon successful admission of the workload, when the workload is deleted or evicted, or when the trigger condition is no longer true (for instance, when enough quota becomes freed to admit the workload directly without preemption).
 
 The supported in-memory trigger types are:
+
 - `InsufficientQuota`: The ClusterQueue or Cohort does not have enough unused quota to admit the workload directly.
 - `QuotaReclaimRequired`: The workload cannot be scheduled because nominal quota was borrowed by cohort members; reclaiming this quota from borrowers is required.
 - `InsufficientTopology`: Quota is available, but no topology domain satisfies the workload's topology requirements (TAS).
@@ -946,7 +945,6 @@ The sophisticated dynamic candidate iteration algorithm described in [Efficient 
 3. **Fast CQ-Level Pruning**: Dynamic cluster properties—such as current borrowed quota—can be tracked at the queue level. When a ClusterQueue exhausts its borrowing capacity, its entire priority queue under that borrowing selector is immediately pruned from consideration.
 4. **Selector Isolation**: Maintaining distinct queues per selector ensures that dropping an ineligible queue under a borrowing selector does not inadvertently discard candidates from the same ClusterQueue that remain eligible under static selectors (such as priority-only preemption within the same CQ).
 5. **Deduplication & Preemption Justification**: Workloads matching multiple selectors (across one or more rules) reside at the heads of multiple queues (held via shared references) and are popped simultaneously when selected. This multi-queue membership directly identifies all matching candidate selectors and rules, providing precise metadata for preemption justification in workload status conditions and audit logs (see [Observability](#observability)).
-
 
 ### Observability
 
@@ -1768,6 +1766,7 @@ type PreemptionRule struct {
 ```
 
 When `minTriggerRequiredDuration` is configured with a duration greater than `0s`:
+
 - When an active trigger is first observed on an unadmitted workload, its observation timestamp is stored in the in-memory cache, and the workload is moved to `inadmissibleWorkloads`.
 - An in-memory timer is scheduled to requeue the workload back to the active queue once the required duration elapses.
 - During scheduling cycles, `PreemptionEvaluator` validates whether `now - inMemoryObserved >= minTriggerRequiredDuration` before considering the rule eligible for candidate selection.
@@ -1792,4 +1791,3 @@ spec:
               relation: "Lower"
               defaultValue: 0
 ```
-
