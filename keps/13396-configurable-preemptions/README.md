@@ -1,7 +1,6 @@
 # KEP-13396: Configurable Preemptions
 
 <!-- toc -->
-
 - [Summary](#summary)
 - [Motivation](#motivation)
   - [1. Defragmentation](#1-defragmentation)
@@ -24,14 +23,19 @@
     - [Security considerations](#security-considerations)
 - [Design Details](#design-details)
   - [Proposed API PreemptionConfig](#proposed-api-preemptionconfig)
+    - [Default Candidate Ordering](#default-candidate-ordering)
   - [Proposed API for PreemptionLimit](#proposed-api-for-preemptionlimit)
+    - [Observability When Reaching Preemption Limits](#observability-when-reaching-preemption-limits)
   - [Preemption evaluation flow in scheduler](#preemption-evaluation-flow-in-scheduler)
     - [Step-by-Step Breakdown](#step-by-step-breakdown)
-  - [Efficient iteration through candidates in configured order](#efficient-iteration-through-candidates-in-configured-order)
+  - [Efficient iteration through candidates in preemption order](#efficient-iteration-through-candidates-in-preemption-order)
     - [Problem Statement](#problem-statement)
     - [Naive Solutions and Complexity Bottlenecks](#naive-solutions-and-complexity-bottlenecks)
     - [Proposed Approach: Per-Selector, Per-CQ Priority Queues](#proposed-approach-per-selector-per-cq-priority-queues)
+    - [Example Walkthrough](#example-walkthrough)
     - [Implementation Caveats and Selector Isolation](#implementation-caveats-and-selector-isolation)
+    - [Complexity of the Proposed Solution](#complexity-of-the-proposed-solution)
+    - [Complexity Comparison](#complexity-comparison)
     - [Open Challenges](#open-challenges)
   - [Observability](#observability)
   - [Test Plan](#test-plan)
@@ -45,6 +49,12 @@
 - [Implementation History](#implementation-history)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
+- [Future Work](#future-work)
+  - [Configurable Candidate Ordering](#configurable-candidate-ordering)
+    - [Proposed API for Custom Ordering](#proposed-api-for-custom-ordering)
+    - [Examples with Custom Ordering](#examples-with-custom-ordering)
+      - [Story 1 - Defragmentation with Explicit Priority Ordering](#story-1---defragmentation-with-explicit-priority-ordering)
+      - [Story 2 - Hero Workload with Explicit Priority Ordering](#story-2---hero-workload-with-explicit-priority-ordering)
 <!-- /toc -->
 
 ## Summary
@@ -70,7 +80,7 @@ updates.
 
 This KEP introduces **Configurable Preemptions** in Kueue through two cluster-scoped CRDs: `PreemptionConfig` and `PreemptionLimit`.
 This enables declarative preemption policies for scenarios unsupported by existing heuristics, including topology defragmentation, mission-critical "hero" workloads, and business SLA constraints.
-With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints), candidate selectors (such as priority relations, execution age, and custom numeric labels), and deterministic ordering. `PreemptionLimit` provides rate-limiting guardrails across global, queue, and workload scopes to prevent cascading preemptions and maintain cluster stability.
+With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints) and candidate selectors (such as priority relations, execution age, and custom numeric labels). In the initial iteration, candidate evaluation reuses the default ordering rules from classical preemption and fair sharing (with custom ordering deferred to future work). `PreemptionLimit` provides rate-limiting guardrails across global, queue, and workload scopes to prevent cascading preemptions and maintain cluster stability.
 
 ## Motivation
 
@@ -245,8 +255,9 @@ demonstrate the interest in a KEP within the wider Kubernetes community.
 Introduce a new CRD **PreemptionConfig** that will be used to define:
 
 - triggers for when preemption should occur (e.g. insufficient topology to schedule the workload),
-- rules defining which workloads should be considered for preemption,
-- order in which workloads should be preempted (until the considered workload can be scheduled).
+- rules defining which workloads should be considered for preemption.
+
+In the initial iteration, candidate workloads are evaluated and ordered using the default ordering rules from classical preemption and fair sharing (reusing the existing preemption ordering logic in `pkg/scheduler/preemption/common/ordering.go`). Configurable candidate ordering is deferred to [Future Work](#future-work).
 
 The **PreemptionConfig** object is a cluster-wide resource that can be referenced by multiple cluster queues.
 
@@ -325,15 +336,13 @@ spec:
   rules:
     - trigger: "InsufficientTopology"
       minTriggerRequiredDuration: "30s"
-      candidates:
+      candidateSelectors:
         - relativeWorkloadPriority: "LowerOrEqual"
           relationRequirement: "AnyClusterQueue"
           numericLabels:
             - key: "tpus-count"
               relation: "Lower"
               default: 0
-  ordering:
-    - orderingField: "Priority"
 ```
 
 As it has an `AnyClusterQueue` relation, it can preempt workloads even if they are not related in any way to the preemptor cluster queue. In combination with a custom numeric label selector using strict `Lower`, this guarantees asymmetry: a larger-topology workload can preempt smaller workloads blocking the required topology domain, but smaller or equal-sized workloads cannot preempt the larger workload in return, preventing mutual preemption loops. Effectively, when the smaller workloads are re-admitted, they can be placed in smaller fragmented domains (where the larger workload cannot fit), thereby defragmenting the cluster.
@@ -355,15 +364,13 @@ This can be achieved by a separate preemption config for the hero job. The confi
 spec:
   rules:
     - trigger: "InsufficientTopology"
-      candidates:
+      candidateSelectors:
         - relativeWorkloadPriority: "Lower"
           relationRequirement: "AnyClusterQueue"
     - trigger: "InsufficientQuota"
-      candidates:
+      candidateSelectors:
         - relativeWorkloadPriority: "Lower"
           relationRequirement: "AnyClusterQueue"
-  ordering:
-    - orderingField: "Priority"
 ```
 
 And then to make sure that the hero job is never preempted, one may:
@@ -453,16 +460,6 @@ type PreemptionConfig struct {
 type PreemptionConfigSpec struct {
   // Rules to select preemption candidates.
   Rules []PreemptionRule
-
-  // Ordering of preemption candidates evaluated sequentially as a multi-key comparator chain.
-  // Workloads already marked for eviction (`isEvicted`) are always prioritized first implicitly,
-  // so this criterion is omitted from the configurable ordering list.
-  // The order is always deterministic, as the Workload UID is used as the final tie-breaker.
-  // If not set, candidates will be ordered by default like this:
-  // 1. Priority (Ascending: lowest priority first)
-  // 2. AdmissionTimestamp (Descending: most recently admitted first, protecting long-running workloads)
-  // 3. UID (Ascending: deterministic tie-breaker)
-  Ordering []Order
 }
 
 // +kubebuilder:validation:Enum=InsufficientQuota;QuotaReclaimRequired;InsufficientTopology
@@ -507,19 +504,19 @@ type PreemptionRule struct {
   Trigger PreemptionRuleTrigger `json:"trigger"`
 
   // MinTriggerRequiredDuration specifies how long the trigger condition must be observed before
-  // preempting workloads specified by candidates. 0s indicates that preemptions can be started immediately.
+  // preempting workloads specified by candidateSelectors. 0s indicates that preemptions can be started immediately.
   // Defaults to 0s.
   //
   // +optional
   // +kubebuilder:default="0s"
   MinTriggerRequiredDuration metav1.Duration `json:"minTriggerRequiredDuration,omitempty"`
 
-  // Candidates specifies the selection rules for workloads that are candidates for preemption.
+  // CandidateSelectors specifies the selection rules for workloads that are candidates for preemption.
   // Candidates resulting from multiple selectors are summed into one set.
   // No selectors result in an empty candidate set, thereby disallowing any preemptions with this rule.
   //
   // +optional
-  Candidates []PreemptionCandidateSelector `json:"candidates,omitempty"`
+  CandidateSelectors []PreemptionCandidateSelector `json:"candidateSelectors,omitempty"`
 }
 ```
 
@@ -691,115 +688,20 @@ const (
 // This maintains consistency with equality comparisons, enhances YAML readability, and provides
 // clear, intuitive semantics for cluster administrators.
 
-// OrderingField specifies the criterion used to sort candidate workloads during preemption evaluation.
-// Note: OrderingField is a predefined enum of sorting keys, not arbitrary fields of the Workload struct.
-// Supported values are:
-// - "Priority": orders workloads by effective priority (accounting for priority boost if enabled).
-//   - Ascending (default): lowest priority first.
-//   - Descending: highest priority first.
-//
-// - "AdmissionTimestamp": orders workloads by the timestamp when quota was reserved (admitted).
-//   - Ascending (default): oldest admitted workloads first (FIFO preemption).
-//   - Descending: most recently admitted workloads first (LIFO preemption, protecting long-running workloads, matching classical Kueue).
-//
-// - "ClusterQueueDRS": orders workloads based on their ClusterQueue's Dominant Resource Share.
-//   - Ascending (default): workloads from ClusterQueues with lower Dominant Resource Share first.
-//   - Descending: workloads from ClusterQueues with higher Dominant Resource Share first (preempting heavy borrowers first).
-//
-// - "IsOtherCQ": orders workloads based on whether they belong to a different ClusterQueue than the preemptor.
-//   - Ascending (default): workloads from the same ClusterQueue first, followed by other ClusterQueues.
-//   - Descending: workloads from other ClusterQueues first, followed by the same ClusterQueue.
-//
-// - "IsOtherCohort": orders workloads based on whether they belong to a different Cohort than the preemptor.
-//   - Ascending (default): workloads from the same direct Cohort first, followed by other Cohorts.
-//   - Descending: workloads from other Cohorts first, followed by the same Cohort.
-//
-// - "IsDRSLessThanInitialShare": orders workloads based on whether preemption of the workload is fair according to the DRSLessThanInitialShare strategy.
-//   - Ascending (default): workloads from ClusterQueues exceeding their initial share first (prioritizing preemption of borrowing workloads).
-//   - Descending: workloads from ClusterQueues within their initial share first.
-//
-// - "IsDRSLessThanOrEqualToFinalShare": orders workloads based on whether preemption of the workload is fair according to the DRSLessThanOrEqualToFinalShare strategy.
-//   - Ascending (default): workloads from ClusterQueues exceeding their final share first (protecting workloads within fair share).
-//   - Descending: workloads from ClusterQueues within or equal to their final share first.
-//
-// +kubebuilder:validation:Enum=Priority;AdmissionTimestamp;ClusterQueueDRS;IsOtherCQ;IsOtherCohort;IsDRSLessThanInitialShare;IsDRSLessThanOrEqualToFinalShare
-type OrderingField string
-
-const (
-  // Priority orders candidates by effective priority (accounting for priority boost if enabled).
-  // Ascending order places lowest priority candidates first.
-  Priority OrderingField = "Priority"
-
-  // AdmissionTimestamp orders candidates by the time quota was reserved.
-  // Ascending order places oldest admitted candidates first and most recently admitted last.
-  AdmissionTimestamp OrderingField = "AdmissionTimestamp"
-
-  // ClusterQueueDRS orders candidates based on their ClusterQueue's Dominant Resource Share.
-  // Ascending order places candidates from ClusterQueues with lower Dominant Resource Share first.
-  ClusterQueueDRS OrderingField = "ClusterQueueDRS"
-
-  // IsOtherCQ orders candidates based on whether their ClusterQueue differs from the preemptor.
-  // Ascending order places workloads from the same ClusterQueue first.
-  IsOtherCQ OrderingField = "IsOtherCQ"
-
-  // IsOtherCohort orders candidates based on whether their direct Cohort differs from the preemptor.
-  // Ascending order places workloads from the same Cohort first.
-  IsOtherCohort OrderingField = "IsOtherCohort"
-
-  // IsDRSLessThanInitialShare orders candidates based on whether preemption is fair according to DRSLessThanInitialShare.
-  // Ascending order places workloads whose ClusterQueue exceeds initial share first.
-  IsDRSLessThanInitialShare OrderingField = "IsDRSLessThanInitialShare"
-
-  // IsDRSLessThanOrEqualToFinalShare orders candidates based on whether preemption is fair according to DRSLessThanOrEqualToFinalShare.
-  // Ascending order places workloads whose ClusterQueue exceeds final share first.
-  IsDRSLessThanOrEqualToFinalShare OrderingField = "IsDRSLessThanOrEqualToFinalShare"
-)
-
-// OrderingDirection specifies the sort direction for a candidate ordering criterion.
-// Possible values are:
-// - "Ascending": sort in natural ascending order (default).
-// - "Descending": sort in reverse/descending order.
-//
-// +kubebuilder:validation:Enum=Ascending;Descending
-type OrderingDirection string
-
-const (
-  // Ascending sorts candidate workloads in natural order (e.g., lowest priority first, oldest admission first, or same CQ/Cohort first).
-  Ascending OrderingDirection = "Ascending"
-
-  // Descending sorts candidate workloads in reverse order (e.g., highest priority first, newest admission first, or other CQ/Cohort first).
-  Descending OrderingDirection = "Descending"
-)
-
-// Order specifies a single sorting criterion and direction for ordering preemption candidates.
-// Multiple Order criteria are evaluated sequentially as a multi-key comparator chain,
-// with ties broken by Workload UID for deterministic ordering.
-type Order struct {
-  // OrderingField specifies the field to sort preemption candidates by.
-  //
-  // +kubebuilder:validation:Required
-  OrderingField OrderingField `json:"orderingField"`
-
-  // Direction specifies whether to sort preemption candidates in ascending or descending order.
-  // Defaults to "Ascending" if not specified.
-  //
-  // +kubebuilder:default=Ascending
-  // +optional
-  Direction OrderingDirection `json:"direction,omitempty"`
-}
-
 ```
 
-As defined by [current ordering](https://github.com/kubernetes-sigs/kueue/blob/24f6f99135979076a8d56ca7fc407990b98c66af/pkg/scheduler/preemption/common/ordering.go#L34-L41),
-the order is currently based on:
+#### Default Candidate Ordering
 
-0. Workloads already marked for preemption first.
+In the initial iteration, candidate workloads are evaluated and ordered using the default ordering rules for classical preemption and fair sharing (reusing the logic from [`pkg/scheduler/preemption/common/ordering.go`](../../pkg/scheduler/preemption/common/ordering.go#L34-L41)):
+
+0. Workloads already marked for preemption/eviction first (`isEvicted`).
 1. Workloads from other ClusterQueues in the cohort before the ones in the same ClusterQueue as the preemptor.
-2. (AdmissionFairSharing only) Workloads with lower LocalQueue's usage first
-3. Workloads with lower priority first.
-4. Workloads admitted more recently first.
+2. (AdmissionFairSharing only) Workloads with lower LocalQueue's usage first.
+3. Workloads with lower priority first (accounting for effective priority and priority boost if enabled).
+4. Workloads admitted more recently first (protecting long-running workloads, matching classical Kueue).
+5. Workload UID as tie-breaker for deterministic sorting.
 
-Therefore, the new ordering fields should cover this well.
+Configurable candidate ordering via an `Ordering` field is deferred to [Future Work](#future-work).
 
 ### Proposed API for PreemptionLimit
 
@@ -897,7 +799,7 @@ flowchart TD
         K -->|Yes| M["Upper-Bound Feasibility Check<br/>(CandidatesQuotaAndTopologyUpperLimit)"]
         M --> N{"Preemptor Fits if ALL<br/>Candidates Preempted?"}
         N -->|No| O["Preemption Infeasible<br/>(Preemptor cannot fit even with all candidates)"]
-        N -->|Yes| P["Order Candidates<br/>(Sort per PreemptionConfig.Spec.Ordering)"]
+        N -->|Yes| P["Order Candidates<br/>(Sort per default preemption ordering)"]
 
         P --> Q["Candidate Selection Loop"]
         Q --> R["Take Next Candidate in Order"]
@@ -967,7 +869,7 @@ flowchart TD
    - If the preemptor cannot fit even when all candidates are preempted, the evaluation terminates early.
 
 4. **Ordered Candidate Iteration (Quota & Topology Satisfaction)**:
-   - Candidates are sorted based on `PreemptionConfig.Spec.Ordering`.
+   - Candidates are sorted based on the default preemption ordering rules (reusing classical preemption and fair sharing ordering logic).
    - The scheduler iterates through candidate workloads in order, adding victims until the preemptor's resource quota and topology domain requirements are fully satisfied.
 
 5. **Reverse-Order Victim Backfilling**:
@@ -988,7 +890,7 @@ Preemption limits are evaluated in two complementary phases within `PreemptionEv
 
 `CandidatesQuotaAndTopologyUpperLimit` by design is just an approximation to allow for short-circuiting when the preemptor obviously will not be admitted anyway. It will just use the initial state of the `PreemptionEvaluator` and does not attempt to simulate changes in DRS, borrowing, or preemption limits during iteration over candidates. However, the returned values should always be greater than or equal to what can be preempted at this moment, so it is reasonable to avoid heavy simulation if the result is smaller than the requested amount.
 
-### Efficient iteration through candidates in configured order
+### Efficient iteration through candidates in preemption order
 
 #### Problem Statement
 
@@ -1026,7 +928,7 @@ To achieve optimal scheduling performance without repetitive full-array scans or
    For selectors requiring workload-level evaluation (such as `DRSLessThanOrEqualToFinalShare`), the entire queue cannot simply be dropped at the CQ level because eligibility depends on the individual workload's DRS value. For these selectors, candidates are evaluated at extraction time when inspected at the queue head. If a candidate violates the fair-sharing constraint under current simulated state, it is popped and discarded for that selector.
 
 4. **Multi-Queue Head Selection:**
-   At each preemption step, the evaluator inspects the heads of all active priority queues and selects the globally minimal candidate according to the configured `PreemptionConfig.Spec.Ordering`.
+   At each preemption step, the evaluator inspects the heads of all active priority queues and selects the globally minimal candidate according to the default preemption ordering rules.
 
 5. **Deduplication & Multi-Queue Popping:**
    A single workload can match multiple candidate selectors (across one or more preemption rules) and thus reside in multiple priority queues. Because the ordering comparator is consistent across queues, the selected minimal workload will always be at the head of all its corresponding queues. When chosen, it is popped from all matching queue heads simultaneously. Workloads are stored as shared pointers/references across queues to eliminate data duplication.
@@ -1046,8 +948,8 @@ Consider three cluster queues (CQ A, CQ B, and CQ C) in a flat cohort, each with
   - Candidates in CQ A: A1 (Priority = 20), A2 (Priority = 50).
   - Candidates in CQ B: B1 (Priority = 5), B2 (Priority = 10).
   - Candidates in CQ C: C1 (Priority = 30), C2 (Priority = 60).
-- **Configured Rules & Ordering**:
-  - `Ordering` is configured by `Priority` (Ascending, meaning lower priority workloads are preempted first).
+- **Rules & Candidate Ordering**:
+  - Candidates are evaluated according to default preemption ordering rules (lower priority workloads preempted first).
   - _Rule 1 (Priority-based, intra-CQ)_: Preempt workloads within the same CQ (CQ A) with strictly lower priority than the preemptor (priority < 40). Candidate matching: Workload A1 (Priority 20).
   - _Rule 2 (Fair Sharing, inter-CQ)_: Preempt workloads from any ClusterQueue whose DRS exceeds its fair share.
 
@@ -1173,7 +1075,7 @@ For now, the test plan is focused on PreemptionConfig. PreemptionLimits-related 
 1. Trigger conditions — new conditions are added to the workload when it cannot be admitted for a particular reason, and cleared upon admission.
 2. Preemption Evaluator:
    - Uses only rules that are applicable according to the trigger and minimal trigger duration.
-   - Orders candidates according to selected ordering.
+   - Orders candidates according to default preemption ordering rules (reusing classical preemption and fair sharing ordering logic).
    - Collects candidates from multiple rules and deduplicates.
    - Updates DRS and borrowing information dynamically — filtering out candidates that
      should no longer be selected according to DRS/Borrowing selectors.
@@ -1244,7 +1146,7 @@ Proposed implementation approach:
 
 Implementation of the foundations of PreemptionConfig:
 
-- initial version of ordering
+- candidate ordering reusing classical preemption ordering logic
 - triggers
 - iteration through candidates
 
@@ -1256,7 +1158,7 @@ Implementation of the following candidate selector fields and constraints to hav
 
 Expose the implementation under feature gate "ConfigurablePreemptions", integration should not change in any way the existing preemption logic.
 
-**Step 2.** Implement fair sharing and borrowing based rules and ordering.
+**Step 2.** Implement fair sharing and borrowing based rules, integrating with fair sharing candidate ordering.
 
 Create performance test suite for preemptions to validate current implementation.
 
@@ -1313,3 +1215,188 @@ Why should this KEP _not_ be implemented?
    - It will not allow limiting preemptions globally across cluster queues.
    - It will make configurations like "this cluster queue should never be preempted" unintuitive.
    - It will make limits across different configs harder to maintain or infeasible at all.
+
+## Future Work
+
+### Configurable Candidate Ordering
+
+In the initial iteration of `PreemptionConfig`, candidate workloads are ordered strictly by reusing the default ordering rules from classical preemption and fair sharing (as defined in `pkg/scheduler/preemption/common/ordering.go`):
+
+0. Workloads already marked for preemption first (`isEvicted`).
+1. Workloads from other ClusterQueues in the cohort before the ones in the same ClusterQueue as the preemptor.
+2. (AdmissionFairSharing only) Workloads with lower LocalQueue fair sharing usage first.
+3. Workloads with lower priority first (effective priority).
+4. Workloads admitted more recently first (protecting long-running workloads).
+5. Workload UID as tie-breaker for deterministic sorting.
+
+In future iterations, we plan to reintroduce the `Ordering` field in `PreemptionConfigSpec` to allow cluster administrators to configure custom multi-key ordering comparator chains.
+
+#### Proposed API for Custom Ordering
+
+```go
+type PreemptionConfigSpec struct {
+  // Rules to select preemption candidates.
+  Rules []PreemptionRule
+
+  // Ordering of preemption candidates evaluated sequentially as a multi-key comparator chain.
+  // Workloads already marked for eviction (`isEvicted`) are always prioritized first implicitly,
+  // so this criterion is omitted from the configurable ordering list.
+  // The order is always deterministic, as the Workload UID is used as the final tie-breaker.
+  // If not set, candidates will be ordered by default like this:
+  // 1. Priority (Ascending: lowest priority first)
+  // 2. AdmissionTimestamp (Descending: most recently admitted first, protecting long-running workloads)
+  // 3. UID (Ascending: deterministic tie-breaker)
+  // +optional
+  Ordering []Order `json:"ordering,omitempty"`
+}
+
+// OrderingField specifies the criterion used to sort candidate workloads during preemption evaluation.
+// Note: OrderingField is a predefined enum of sorting keys, not arbitrary fields of the Workload struct.
+// Supported values are:
+// - "Priority": orders workloads by effective priority (accounting for priority boost if enabled).
+//   - Ascending (default): lowest priority first.
+//   - Descending: highest priority first.
+//
+// - "AdmissionTimestamp": orders workloads by the timestamp when quota was reserved (admitted).
+//   - Ascending (default): oldest admitted workloads first (FIFO preemption).
+//   - Descending: most recently admitted workloads first (LIFO preemption, protecting long-running workloads, matching classical Kueue).
+//
+// - "ClusterQueueDRS": orders workloads based on their ClusterQueue's Dominant Resource Share.
+//   - Ascending (default): workloads from ClusterQueues with lower Dominant Resource Share first.
+//   - Descending: workloads from ClusterQueues with higher Dominant Resource Share first (preempting heavy borrowers first).
+//
+// - "IsOtherCQ": orders workloads based on whether they belong to a different ClusterQueue than the preemptor.
+//   - Ascending (default): workloads from the same ClusterQueue first, followed by other ClusterQueues.
+//   - Descending: workloads from other ClusterQueues first, followed by the same ClusterQueue.
+//
+// - "IsOtherCohort": orders workloads based on whether they belong to a different Cohort than the preemptor.
+//   - Ascending (default): workloads from the same direct Cohort first, followed by other Cohorts.
+//   - Descending: workloads from other Cohorts first, followed by the same Cohort.
+//
+// - "IsDRSLessThanInitialShare": orders workloads based on whether preemption of the workload is fair according to the DRSLessThanInitialShare strategy.
+//   - Ascending (default): workloads from ClusterQueues exceeding their initial share first (prioritizing preemption of borrowing workloads).
+//   - Descending: workloads from ClusterQueues within their initial share first.
+//
+// - "IsDRSLessThanOrEqualToFinalShare": orders workloads based on whether preemption of the workload is fair according to the DRSLessThanOrEqualToFinalShare strategy.
+//   - Ascending (default): workloads from ClusterQueues exceeding their final share first (protecting workloads within fair share).
+//   - Descending: workloads from ClusterQueues within or equal to their final share first.
+//
+// +kubebuilder:validation:Enum=Priority;AdmissionTimestamp;ClusterQueueDRS;IsOtherCQ;IsOtherCohort;IsDRSLessThanInitialShare;IsDRSLessThanOrEqualToFinalShare
+type OrderingField string
+
+const (
+  // Priority orders candidates by effective priority (accounting for priority boost if enabled).
+  // Ascending order places lowest priority candidates first.
+  Priority OrderingField = "Priority"
+
+  // AdmissionTimestamp orders candidates by the time quota was reserved.
+  // Ascending order places oldest admitted candidates first and most recently admitted last.
+  AdmissionTimestamp OrderingField = "AdmissionTimestamp"
+
+  // ClusterQueueDRS orders candidates based on their ClusterQueue's Dominant Resource Share.
+  // Ascending order places candidates from ClusterQueues with lower Dominant Resource Share first.
+  ClusterQueueDRS OrderingField = "ClusterQueueDRS"
+
+  // IsOtherCQ orders candidates based on whether their ClusterQueue differs from the preemptor.
+  // Ascending order places workloads from the same ClusterQueue first.
+  IsOtherCQ OrderingField = "IsOtherCQ"
+
+  // IsOtherCohort orders candidates based on whether their direct Cohort differs from the preemptor.
+  // Ascending order places workloads from the same Cohort first.
+  IsOtherCohort OrderingField = "IsOtherCohort"
+
+  // IsDRSLessThanInitialShare orders candidates based on whether preemption is fair according to DRSLessThanInitialShare.
+  // Ascending order places workloads whose ClusterQueue exceeds initial share first.
+  IsDRSLessThanInitialShare OrderingField = "IsDRSLessThanInitialShare"
+
+  // IsDRSLessThanOrEqualToFinalShare orders candidates based on whether preemption is fair according to DRSLessThanOrEqualToFinalShare.
+  // Ascending order places workloads whose ClusterQueue exceeds final share first.
+  IsDRSLessThanOrEqualToFinalShare OrderingField = "IsDRSLessThanOrEqualToFinalShare"
+)
+
+// OrderingDirection specifies the sort direction for a candidate ordering criterion.
+// Possible values are:
+// - "Ascending": sort in natural ascending order (default).
+// - "Descending": sort in reverse/descending order.
+//
+// +kubebuilder:validation:Enum=Ascending;Descending
+type OrderingDirection string
+
+const (
+  // Ascending sorts candidate workloads in natural order (e.g., lowest priority first, oldest admission first, or same CQ/Cohort first).
+  Ascending OrderingDirection = "Ascending"
+
+  // Descending sorts candidate workloads in reverse order (e.g., highest priority first, newest admission first, or other CQ/Cohort first).
+  Descending OrderingDirection = "Descending"
+)
+
+// Order specifies a single sorting criterion and direction for ordering preemption candidates.
+// Multiple Order criteria are evaluated sequentially as a multi-key comparator chain,
+// with ties broken by Workload UID for deterministic ordering.
+type Order struct {
+  // OrderingField specifies the field to sort preemption candidates by.
+  //
+  // +kubebuilder:validation:Required
+  OrderingField OrderingField `json:"orderingField"`
+
+  // Direction specifies whether to sort preemption candidates in ascending or descending order.
+  // Defaults to "Ascending" if not specified.
+  //
+  // +kubebuilder:default=Ascending
+  // +optional
+  Direction OrderingDirection `json:"direction,omitempty"`
+}
+```
+
+As defined by [current ordering](https://github.com/kubernetes-sigs/kueue/blob/24f6f99135979076a8d56ca7fc407990b98c66af/pkg/scheduler/preemption/common/ordering.go#L34-L41),
+the order is currently based on:
+
+0. Workloads already marked for preemption first.
+1. Workloads from other ClusterQueues in the cohort before the ones in the same ClusterQueue as the preemptor.
+2. (AdmissionFairSharing only) Workloads with lower LocalQueue's usage first.
+3. Workloads with lower priority first.
+4. Workloads admitted more recently first.
+
+Therefore, the proposed custom ordering fields were designed to cover and generalize this well.
+
+#### Examples with Custom Ordering
+
+In future work, users would be able to configure explicit candidate ordering in `PreemptionConfig` manifests:
+
+##### Story 1 - Defragmentation with Explicit Priority Ordering
+
+```yaml
+spec:
+  rules:
+    - trigger: "InsufficientTopology"
+      minTriggerRequiredDuration: "30s"
+      candidateSelectors:
+        - relativeWorkloadPriority: "LowerOrEqual"
+          relationRequirement: "AnyClusterQueue"
+          numericLabels:
+            - key: "tpus-count"
+              relation: "Lower"
+              default: 0
+  ordering:
+    - orderingField: "Priority"
+      direction: "Ascending"
+```
+
+##### Story 2 - Hero Workload with Explicit Priority Ordering
+
+```yaml
+spec:
+  rules:
+    - trigger: "InsufficientTopology"
+      candidateSelectors:
+        - relativeWorkloadPriority: "Lower"
+          relationRequirement: "AnyClusterQueue"
+    - trigger: "InsufficientQuota"
+      candidateSelectors:
+        - relativeWorkloadPriority: "Lower"
+          relationRequirement: "AnyClusterQueue"
+  ordering:
+    - orderingField: "Priority"
+      direction: "Ascending"
+```
+
