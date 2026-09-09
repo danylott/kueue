@@ -642,12 +642,14 @@ type PreemptionRule struct {
 }
 ```
 
-The first observation timestamp when a specific trigger occurred is recorded in the workload conditions. The conditions are cleared upon successful admission of the workload or if they are no longer true in the case of quota-related conditions.
+The trigger state and the first observation timestamp when a specific trigger occurred are maintained in-memory within the queue management and scheduling cache (rather than being patched as status conditions on the Workload API object). The in-memory trigger state is cleared upon successful admission of the workload, when the workload is deleted or evicted, or when the trigger condition is no longer true (for instance, when enough quota becomes freed to admit the workload directly without preemption).
 
-This will result in the following new condition types:
-`InsufficientQuota`, `InsufficientTopology`, `QuotaReclaimRequired`.
+The supported in-memory trigger types are:
+- `InsufficientQuota`: The ClusterQueue or Cohort does not have enough unused quota to admit the workload directly.
+- `QuotaReclaimRequired`: The workload cannot be scheduled because nominal quota was borrowed by cohort members; reclaiming this quota from borrowers is required.
+- `InsufficientTopology`: Quota is available, but no topology domain satisfies the workload's topology requirements (TAS).
 
-For quota-related conditions, the `reason` field will be set to `QuotaFreed` if the condition was reset due to enough quota becoming available to schedule the workload.
+By maintaining triggers in-memory, the scheduler avoids etcd write amplification, eliminates informer watch propagation latency between scheduling cycles, and prevents duplicate API patch conflicts while still enabling precise duration-based rules (`MinTriggerRequiredDuration`).
 
 ```go
 
@@ -884,21 +886,21 @@ The preemption evaluation flow integrates trigger condition tracking, upper-boun
 
 ```mermaid
 flowchart TD
-    subgraph Cycle1 ["1. Initial Cycle: Nomination & Trigger Condition Tracking"]
+    subgraph Cycle1 ["1. Initial Cycle: Nomination & In-Memory Trigger Tracking"]
         A["Queue Heads Retrieved<br/>(queues.Heads)"] --> B["Nominate Workloads<br/>(nominate)"]
         B --> C["Order Entries into Iterator"]
         C --> D["Process Entry<br/>(processEntry)"]
         D --> E{"Workload Fits Directly?"}
         E -->|Yes| F["Admit Workload<br/>(admit)"]
-        E -->|No| G["Assign / Update Trigger Conditions<br/>with Observation Timestamp in Workload Status<br/>(InsufficientQuota / QuotaReclaimRequired / InsufficientTopology)"]
-        G --> H["Requeue Workload<br/>(Wait for trigger duration / quota)"]
+        E -->|No| G["Record Trigger State & Observation Timestamp<br/>in Queue Memory Cache<br/>(InsufficientQuota / QuotaReclaimRequired / InsufficientTopology)"]
+        G --> H["Requeue Workload<br/>(Immediate for 0s duration / Timer for >0s duration)"]
     end
 
     subgraph CycleN ["2. Subsequent Cycles: Preemption Evaluation in getInitialAssignments"]
-        H -.->|Next Scheduling Cycle| I["Consider Workload in Subsequent Cycle<br/>(nominate -> getInitialAssignments)"]
-        I --> J["Evaluate Trigger Durations & Limits<br/>(PreemptionEvaluator)"]
-        J --> K{"Is Any Trigger Duration Satisfied?<br/>(now - observed >= minDuration)"}
-        K -->|No| L["Preemption Not Eligible Yet<br/>(Keep waiting / update condition)"]
+        H -.->|Next Scheduling Cycle / Timer Expiry| I["Consider Workload in Subsequent Cycle<br/>(nominate -> getInitialAssignments)"]
+        I --> J["Evaluate In-Memory Trigger Durations & Limits<br/>(PreemptionEvaluator)"]
+        J --> K{"Is Any Trigger Duration Satisfied?<br/>(now - inMemoryObserved >= minDuration)"}
+        K -->|No| L["Preemption Not Eligible Yet<br/>(Wait in inadmissible until timer expires)"]
         K -->|Yes| M["Upper-Bound Feasibility Check<br/>(CandidatesQuotaAndTopologyUpperLimit)"]
         M --> N{"Preemptor Fits if ALL<br/>Candidates Preempted?"}
         N -->|No| O["Preemption Infeasible<br/>(Preemptor cannot fit even with all candidates)"]
@@ -958,15 +960,18 @@ flowchart TD
 
 #### Step-by-Step Breakdown
 
-1. **Nomination & Condition Tracking (Cycle 1)**:
+1. **Nomination & In-Memory Trigger Tracking (Cycle 1)**:
    - In `nominate()`, initial resource flavor requirements are calculated for all active queue heads.
    - In `processEntry()`, each entry is processed:
      - If the workload fits directly, it proceeds to admission (`admit()`).
-     - If the workload cannot fit directly (e.g. requires preemption or lacks resources/topology), `processEntry()` assigns or updates the trigger condition (`InsufficientQuota`, `QuotaReclaimRequired`, or `InsufficientTopology`) along with an initial observation timestamp in `Workload.Status.Conditions` and requeues the workload.
+     - If the workload cannot fit directly (e.g. requires preemption or lacks resources/topology), `processEntry()` detects the active triggers (`InsufficientQuota`, `QuotaReclaimRequired`, or `InsufficientTopology`) and records their initial observation timestamp in memory within the queue manager / scheduler cache.
+     - If `MinTriggerRequiredDuration == 0s`, the workload is requeued immediately to the active heap (`immediate = true`), allowing it to be evaluated for preemption on the very next scheduling pass without waiting for API patches or watch delivery.
+     - If `MinTriggerRequiredDuration > 0s`, the workload is moved to `inadmissibleWorkloads`, and an in-memory timer is scheduled to move it back to the active queue once the required duration expires.
 
 2. **Trigger Duration & Preemption Evaluation (`PreemptionEvaluator`)**:
-   - In subsequent scheduling cycles, `getInitialAssignments()` queries `PreemptionEvaluator` to check whether the elapsed time since the first observation timestamp satisfies `MinTriggerRequiredDuration` for any applicable preemption rule and evaluates preemption limits.
-   - If no trigger duration is satisfied, preemption is bypassed for this cycle, allowing the workload to continue waiting.
+   - In subsequent scheduling cycles (either immediately on the next tick for `0s` duration or upon timer expiration for `>0s` duration), `getInitialAssignments()` queries `PreemptionEvaluator` to check whether the elapsed time since the in-memory observation timestamp satisfies `MinTriggerRequiredDuration` for any applicable preemption rule and evaluates preemption limits.
+   - If no trigger duration is satisfied, preemption is bypassed for this cycle, allowing the workload to continue waiting in `inadmissibleWorkloads`.
+   - If triggers are satisfied but no preemption candidates exist in the cluster (e.g. all running workloads have higher priority), the workload is moved to `inadmissibleWorkloads` to prevent infinite busy-looping.
 
 3. **Upper-Bound Feasibility Check (`CandidatesQuotaAndTopologyUpperLimit`)**:
    - If a trigger duration is met, the scheduler performs an upper-bound check using `CandidatesQuotaAndTopologyUpperLimit` by simulating the removal of all matching candidate workloads.
@@ -1183,7 +1188,7 @@ For now, the test plan is focused on PreemptionConfig. PreemptionLimits-related 
 
 #### Unit tests
 
-1. Trigger conditions — new conditions are added to the workload when it cannot be admitted for a particular reason, and cleared upon admission.
+1. Trigger tracking — trigger states and observation timestamps are correctly recorded in memory when a workload cannot be admitted for a particular reason, preserved across requeues, and cleared upon admission or when resources become available.
 2. Preemption Evaluator:
    - Uses only rules that are applicable according to the trigger and minimal trigger duration.
    - Orders candidates according to default preemption ordering rules (reusing classical preemption and fair sharing ordering logic).
@@ -1195,7 +1200,7 @@ For now, the test plan is focused on PreemptionConfig. PreemptionLimits-related 
 
 The majority of the code will be in the `scheduler/preemption` package; a new subpackage with configurable preemptions will be created there.
 
-Small parts of the implementation like conditions or integration with the scheduler itself will be done in other packages and accompanied with appropriate unit tests.
+Small parts of the implementation like in-memory trigger tracking or integration with the scheduler itself will be done in other packages and accompanied with appropriate unit tests.
 
 #### Integration tests
 
@@ -1336,6 +1341,14 @@ Why should this KEP _not_ be implemented?
    - `ClusterQueue.spec.preemption` has declarative defaulting (`+kubebuilder:default={}`). Setting it to `null` or altering declarative defaulting in a mutating webhook is a breaking change for existing clients and manifests.
    - If a formal field `spec.preemptionConfigName` were added in Alpha with merged behavior alongside `spec.preemption`, changing it to mutually exclusive in Beta would be a breaking change to the field's semantics.
    - Using an explicit Alpha annotation (`kueue.x-k8s.io/alpha-preemption-config`) avoids creating a premature field contract while allowing the outputs of both strategies to be merged cleanly for Alpha. When `PreemptionConfig` reaches full feature parity in Beta, both strategies can be made mutually exclusive via a formal API field without breaking backward compatibility.
+
+6. Persisting trigger conditions directly on the Workload API object via status condition patches (`Workload.Status.Conditions`).
+   Ruled out because:
+   - **Informer Watch Latency & Desync**: Writing a condition to etcd via `PatchAdmissionStatus()` and waiting for the informer watch event to update the scheduler's local cache introduces significant latency (tens of milliseconds) compared to the sub-millisecond scheduling cycle. If a workload is requeued immediately for evaluation in the next cycle, the scheduler pops the stale, unpatched object from cache, leading to scheduling failures, high latency, or race conditions.
+   - **Duplicate API Patches & Conflicts**: Because informer watch delivery is asynchronous, re-queuing the workload immediately while the watch event is in flight causes the scheduler to re-evaluate the workload repeatedly against stale cache state, generating duplicate status patch requests and triggering API server conflict errors (`409 Conflict`).
+   - **Inadmissible Trapping vs. Infinite Busy-Loops**: If workloads requiring preemption were marked inadmissible after setting the condition, they would become stuck in `inadmissibleWorkloads` indefinitely because informer condition updates only update inadmissible workloads in place without re-queuing them to the active heap (unless an unrelated cluster event triggers `QueueInadmissibleWorkloads`). Conversely, keeping them in the active queue without conditions causes infinite busy-loops when preemption candidates do not exist in the cluster.
+   - **etcd Churn & Scalability**: Updating status conditions in etcd on every unadmitted scheduling pass creates severe write amplification and API server pressure, particularly in busy clusters with high workload arrival rates and short scheduling intervals.
+   - **Conclusion**: Maintaining triggers and observation timestamps in-memory within the queue management and scheduler cache eliminates informer watch latency, avoids etcd write churn and duplicate API patches, and allows precise timer-based requeuing from inadmissible workloads for non-zero trigger durations.
 
 ## Future Work Ideas
 
