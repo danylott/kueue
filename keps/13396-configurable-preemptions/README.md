@@ -1,6 +1,7 @@
 # KEP-13396: Configurable Preemptions
 
 <!-- toc -->
+
 - [Summary](#summary)
 - [Motivation](#motivation)
   - [1. Defragmentation](#1-defragmentation)
@@ -55,7 +56,8 @@
     - [Examples with Custom Ordering](#examples-with-custom-ordering)
       - [Story 1 - Defragmentation with Explicit Priority Ordering](#story-1---defragmentation-with-explicit-priority-ordering)
       - [Story 2 - Hero Workload with Explicit Priority Ordering](#story-2---hero-workload-with-explicit-priority-ordering)
-<!-- /toc -->
+  - [Time-Based Candidate Selectors (Execution and Creation Duration)](#time-based-candidate-selectors-execution-and-creation-duration) - [Proposed API for Time-Based Candidate Selectors](#proposed-api-for-time-based-candidate-selectors) - [Examples with Time-Based Candidate Selectors](#examples-with-time-based-candidate-selectors) - [Example 1 - Minimal Execution Duration Before Preemption](#example-1---minimal-execution-duration-before-preemption) - [Example 2 - SLA Protection Based on Workload Creation Time](#example-2---sla-protection-based-on-workload-creation-time)
+  <!-- /toc -->
 
 ## Summary
 
@@ -80,7 +82,7 @@ updates.
 
 This KEP introduces **Configurable Preemptions** in Kueue through two cluster-scoped CRDs: `PreemptionConfig` and `PreemptionLimit`.
 This enables declarative preemption policies for scenarios unsupported by existing heuristics, including topology defragmentation, mission-critical "hero" workloads, and business SLA constraints.
-With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints) and candidate selectors (such as priority relations, execution age, and custom numeric labels). In the initial iteration, candidate evaluation reuses the default ordering rules from classical preemption and fair sharing (with custom ordering deferred to future work). In Alpha, `PreemptionConfig` is referenced via an explicit Alpha annotation on the `ClusterQueue` (`kueue.x-k8s.io/alpha-preemption-config`), keeping the defaulting of `spec.preemption` intact and merging the candidate outputs of both classical and configurable preemption strategies. For Beta+, as `PreemptionConfig` achieves full feature parity with classical preemption, both strategies will become mutually exclusive via a formal API field, and the Alpha annotation will be retired. `PreemptionLimit` provides rate-limiting guardrails across global, queue, and workload scopes to prevent cascading preemptions and maintain cluster stability.
+With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints) and candidate selectors (such as priority relations, queue relations, and custom numeric labels, with time-based duration selectors and custom ordering deferred to future work). In the initial iteration, candidate evaluation reuses the default ordering rules from classical preemption and fair sharing. In Alpha, `PreemptionConfig` is referenced via an explicit Alpha annotation on the `ClusterQueue` (`kueue.x-k8s.io/alpha-preemption-config`), keeping the defaulting of `spec.preemption` intact and merging the candidate outputs of both classical and configurable preemption strategies. For Beta+, as `PreemptionConfig` achieves full feature parity with classical preemption, both strategies will become mutually exclusive via a formal API field, and the Alpha annotation will be retired. `PreemptionLimit` provides rate-limiting guardrails across global, queue, and workload scopes to prevent cascading preemptions and maintain cluster stability.
 
 ## Motivation
 
@@ -406,23 +408,11 @@ Thanks to the elevated preemption privileges, the hero job will be able to preem
 
 #### Story 3 - Business driven preemption rules
 
-Requested functionalities from the community can be satisfied with the following configurations:
+Requested functionalities from the community can be satisfied with the following configurations (with time-based duration selectors in stories 5 & 6 deferred to [Future Work](#time-based-candidate-selectors-execution-and-creation-duration)):
 
-1. **Minimal execution duration before preemption ([Issue #9596](https://github.com/kubernetes-sigs/kueue/issues/9596)):**
-   Avoid preempting workloads that just started by requiring candidates to have run for a minimum duration (e.g. at least 15 minutes):
-   ```yaml
-   spec:
-     rules:
-       - name: preempt-only-after-min-exec-time
-         trigger: "InsufficientQuota"
-         candidateSelectors:
-           - relationRequirement: "SameClusterQueue"
-             relativeWorkloadPriority: "Lower"
-             minExecutionDuration: "15m"
-   ```
-
-2. **Priority threshold for within-ClusterQueue preemptions ([Issue #12001](https://github.com/kubernetes-sigs/kueue/issues/12001)):**
+1. **Priority threshold for within-ClusterQueue preemptions ([Issue #12001](https://github.com/kubernetes-sigs/kueue/issues/12001)):**
    Restricted preemption within the same ClusterQueue targeting only candidates matching a specific priority class:
+
    ```yaml
    spec:
      rules:
@@ -435,8 +425,9 @@ Requested functionalities from the community can be satisfied with the following
                  kueue.x-k8s.io/priority-class: "batch-low"
    ```
 
-3. **Priority threshold for reclaim within Cohort ([Issue #12046](https://github.com/kubernetes-sigs/kueue/issues/12046)):**
+2. **Priority threshold for reclaim within Cohort ([Issue #12046](https://github.com/kubernetes-sigs/kueue/issues/12046)):**
    Reclaim borrowed capacity within the cohort only from candidates matching a specific priority class:
+
    ```yaml
    spec:
      rules:
@@ -450,21 +441,9 @@ Requested functionalities from the community can be satisfied with the following
                  kueue.x-k8s.io/priority-class: "batch-low"
    ```
 
-4. **SLA protection based on workload creation time:**
-   Model SLA requirements by only preempting recently created workloads (e.g., created less than 1 hour ago) to avoid preemption of older workloads nearing SLA completion deadlines:
-   ```yaml
-   spec:
-     rules:
-       - name: preempt-recent-workloads-only
-         trigger: "InsufficientQuota"
-         candidateSelectors:
-           - relationRequirement: "SameClusterQueue"
-             relativeWorkloadPriority: "Lower"
-             maxTimeFromCreationDuration: "1h"
-   ```
-
-5. **Resource requests/limits based preemption (filtering by resource size):**
+3. **Resource requests/limits based preemption (filtering by resource size):**
    Protect large, long-running batch workloads from preemption by ensuring only "small" workloads (e.g. workloads requesting at most 8 GPUs or 32 CPU cores) are eligible as preemption candidates using custom numeric labels with `maxValue`:
+
    ```yaml
    spec:
      rules:
@@ -478,8 +457,9 @@ Requested functionalities from the community can be satisfied with the following
                  maxValue: 8
    ```
 
-6. **Advanced topology comparison (matching podset required levels):**
+4. **Advanced topology comparison (matching podset required levels):**
    Ensure preemption only targets workloads that match or fall within specific topology domains or required podset levels (e.g., only preempt workloads constrained to the same `rack` domain) using `workloadSelector` or numeric label relations:
+
    ```yaml
    spec:
      rules:
@@ -491,6 +471,33 @@ Requested functionalities from the community can be satisfied with the following
              workloadSelector:
                matchLabels:
                  kueue.x-k8s.io/topology-level: "rack"
+   ```
+
+5. **Minimal execution duration before preemption ([Issue #9596](https://github.com/kubernetes-sigs/kueue/issues/9596)):** _(Deferred to [Future Work](#time-based-candidate-selectors-execution-and-creation-duration))_
+   Avoid preempting workloads that just started by requiring candidates to have run for a minimum duration (e.g. at least 15 minutes):
+
+   ```yaml
+   spec:
+     rules:
+       - name: preempt-only-after-min-exec-time
+         trigger: "InsufficientQuota"
+         candidateSelectors:
+           - relationRequirement: "SameClusterQueue"
+             relativeWorkloadPriority: "Lower"
+             minExecutionDuration: "15m"
+   ```
+
+6. **SLA protection based on workload creation time:** _(Deferred to [Future Work](#time-based-candidate-selectors-execution-and-creation-duration))_
+   Model SLA requirements by only preempting recently created workloads (e.g., created less than 1 hour ago) to avoid preemption of older workloads nearing SLA completion deadlines:
+   ```yaml
+   spec:
+     rules:
+       - name: preempt-recent-workloads-only
+         trigger: "InsufficientQuota"
+         candidateSelectors:
+           - relationRequirement: "SameClusterQueue"
+             relativeWorkloadPriority: "Lower"
+             maxTimeFromCreationDuration: "1h"
    ```
 
 ### Notes
@@ -716,16 +723,6 @@ type PreemptionCandidateSelector struct {
   // The comparison is made using effective priority (accounting for priority boost if enabled).
   // If nil, no relative priority check is enforced.
   RelativeWorkloadPriority *RelativeConstraint
-
-  // Accepts any execution times if not set
-  MinExecutionDuration *metav1.Duration
-  MaxExecutionDuration *metav1.Duration
-  ExecutionTimeRelation *RelativeConstraint
-
-  // Accepts any time from creation if not set
-  MinTimeFromCreationDuration *metav1.Duration
-  MaxTimeFromCreationDuration *metav1.Duration
-  TimeFromCreationRelation *RelativeConstraint
 }
 
 
@@ -1524,3 +1521,73 @@ spec:
       direction: "Ascending"
 ```
 
+### Time-Based Candidate Selectors (Execution and Creation Duration)
+
+Filtering candidates based on workload execution duration or creation age addresses valid operational and SLA requirements, but is not deemed a must-have in the first iteration of `PreemptionConfig`. These fields are deferred to future work.
+
+Relevant use cases include:
+
+1. **Minimal execution duration before preemption ([Issue #9596](https://github.com/kubernetes-sigs/kueue/issues/9596)):**
+   Avoid thrashing workloads that have just started by requiring candidates to have run for a minimum duration (e.g., at least 15 minutes) before being eligible for preemption.
+2. **SLA protection based on workload creation time:**
+   Prevent preemption of older workloads nearing completion or SLA deadlines by selecting only recently created workloads (e.g., created less than 1 hour ago) as preemption candidates.
+3. **Relative execution time comparison:**
+   Compare the candidate workload's runtime or creation time against the preemptor workload (e.g., only preempt workloads that have been running for shorter duration than the preemptor).
+
+#### Proposed API for Time-Based Candidate Selectors
+
+In a future iteration, `PreemptionCandidateSelector` can be extended with the following duration and time-relation fields:
+
+```go
+type PreemptionCandidateSelector struct {
+  // ... baseline candidate selector fields ...
+
+  // Accepts any execution times if not set.
+  // MinExecutionDuration specifies the minimum runtime a candidate workload must have completed.
+  MinExecutionDuration *metav1.Duration `json:"minExecutionDuration,omitempty"`
+
+  // MaxExecutionDuration specifies the maximum runtime a candidate workload can have completed.
+  MaxExecutionDuration *metav1.Duration `json:"maxExecutionDuration,omitempty"`
+
+  // ExecutionTimeRelation defines how the preemptor's execution time compares to the candidate's.
+  ExecutionTimeRelation *RelativeConstraint `json:"executionTimeRelation,omitempty"`
+
+  // Accepts any time from creation if not set.
+  // MinTimeFromCreationDuration specifies the minimum age of the workload from creation timestamp.
+  MinTimeFromCreationDuration *metav1.Duration `json:"minTimeFromCreationDuration,omitempty"`
+
+  // MaxTimeFromCreationDuration specifies the maximum age of the workload from creation timestamp.
+  MaxTimeFromCreationDuration *metav1.Duration `json:"maxTimeFromCreationDuration,omitempty"`
+
+  // TimeFromCreationRelation defines how the preemptor's creation time compares to the candidate's.
+  TimeFromCreationRelation *RelativeConstraint `json:"timeFromCreationRelation,omitempty"`
+}
+```
+
+#### Examples with Time-Based Candidate Selectors
+
+##### Story 1 - Minimal Execution Duration Before Preemption
+
+```yaml
+spec:
+  rules:
+    - name: preempt-only-after-min-exec-time
+      trigger: "InsufficientQuota"
+      candidateSelectors:
+        - relationRequirement: "SameClusterQueue"
+          relativeWorkloadPriority: "Lower"
+          minExecutionDuration: "15m"
+```
+
+##### Story 2 - SLA Protection Based on Workload Creation Time
+
+```yaml
+spec:
+  rules:
+    - name: preempt-recent-workloads-only
+      trigger: "InsufficientQuota"
+      candidateSelectors:
+        - relationRequirement: "SameClusterQueue"
+          relativeWorkloadPriority: "Lower"
+          maxTimeFromCreationDuration: "1h"
+```
