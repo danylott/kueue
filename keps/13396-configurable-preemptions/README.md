@@ -334,7 +334,8 @@ An example config based on priority and number of TPUs can look like this:
 ```yaml
 spec:
   rules:
-    - trigger: "InsufficientTopology"
+    - name: defrag-smaller-tpu-workloads
+      trigger: "InsufficientTopology"
       minTriggerRequiredDuration: "30s"
       candidateSelectors:
         - relativeWorkloadPriority: "LowerOrEqual"
@@ -342,7 +343,7 @@ spec:
           numericLabels:
             - key: "tpus-count"
               relation: "Lower"
-              default: 0
+              defaultValue: 0
 ```
 
 As it has an `AnyClusterQueue` relation, it can preempt workloads even if they are not related in any way to the preemptor cluster queue. In combination with a custom numeric label selector using strict `Lower`, this guarantees asymmetry: a larger-topology workload can preempt smaller workloads blocking the required topology domain, but smaller or equal-sized workloads cannot preempt the larger workload in return, preventing mutual preemption loops. Effectively, when the smaller workloads are re-admitted, they can be placed in smaller fragmented domains (where the larger workload cannot fit), thereby defragmenting the cluster.
@@ -363,11 +364,13 @@ This can be achieved by a separate preemption config for the hero job. The confi
 ```yaml
 spec:
   rules:
-    - trigger: "InsufficientTopology"
+    - name: hero-reclaim-topology
+      trigger: "InsufficientTopology"
       candidateSelectors:
         - relativeWorkloadPriority: "Lower"
           relationRequirement: "AnyClusterQueue"
-    - trigger: "InsufficientQuota"
+    - name: hero-reclaim-quota
+      trigger: "InsufficientQuota"
       candidateSelectors:
         - relativeWorkloadPriority: "Lower"
           relationRequirement: "AnyClusterQueue"
@@ -376,19 +379,78 @@ spec:
 And then to make sure that the hero job is never preempted, one may:
 
 1. Make the hero job's priority higher than any other workload's priority and do not allow preemption of workloads with higher or equal priority.
-2. Have preemption limits with 0 allowed preemptions from the hero job's CQ. (Doable after milestone 5)
+2. Have preemption limits with 0 allowed preemptions from the hero job's CQ (doable after milestone 5):
+   ```yaml
+   spec:
+     scope: "PreemptedClusterQueue"
+     clusterQueueSelector:
+       matchLabels:
+         kueue.x-k8s.io/queue-name: "hero-cq"
+     limit: 0
+     limitWindowDuration: "1h"
+   ```
 3. Define in candidate selectors subfield `ClusterQueueSelector` of other preemption configs that they cannot preempt from the hero job's CQ.
 
 Thanks to the elevated preemption privileges, the hero job will be able to preempt any workload and borrow quota from other CQs in the cohort tree (this job will still be affected by lending limits — so they have to be set appropriately to allow for gathering quota). It will also effectively lock this quota, as no other workload will be able to preempt it.
 
 #### Story 3 - Business driven preemption rules
 
-Requested functionalities from the community can be satisfied with the following rules:
+Requested functionalities from the community can be satisfied with the following configurations:
 
-1.  [Issue #9596](https://github.com/kubernetes-sigs/kueue/issues/9596) can be satisfied by using `MinExecutionDuration` in the defined configuration rules.
-2.  [Issue #12001](https://github.com/kubernetes-sigs/kueue/issues/12001) can be satisfied by using `CandidateWorkloadPrioritySelector` and "SameClusterQueue" `PreemptionRelationConstraint` in appropriate rules.
-3.  [Issue #12046](https://github.com/kubernetes-sigs/kueue/issues/12046) can also be satisfied by using `CandidateWorkloadPrioritySelector` in rules with a combination of "SameCohort" `PreemptionRelationConstraint` and "BorrowingCapacityFromPreemptor" `QuotaConstraint`.
-4.  Defined SLA requirements can be modeled with `MaxTimeFromCreationDuration` — to avoid preempting workloads that are older than X and are from a specific cluster queue or that have a specific label.
+1. **Minimal execution duration before preemption ([Issue #9596](https://github.com/kubernetes-sigs/kueue/issues/9596)):**
+   Avoid preempting workloads that just started by requiring candidates to have run for a minimum duration (e.g. at least 15 minutes):
+   ```yaml
+   spec:
+     rules:
+       - name: preempt-only-after-min-exec-time
+         trigger: "InsufficientQuota"
+         candidateSelectors:
+           - relationRequirement: "SameClusterQueue"
+             relativeWorkloadPriority: "Lower"
+             minExecutionDuration: "15m"
+   ```
+
+2. **Priority threshold for within-ClusterQueue preemptions ([Issue #12001](https://github.com/kubernetes-sigs/kueue/issues/12001)):**
+   Restricted preemption within the same ClusterQueue targeting only candidates matching a specific priority class:
+   ```yaml
+   spec:
+     rules:
+       - name: preempt-same-cq-low-priority
+         trigger: "InsufficientQuota"
+         candidateSelectors:
+           - relationRequirement: "SameClusterQueue"
+             candidateWorkloadPrioritySelector:
+               matchLabels:
+                 kueue.x-k8s.io/priority-class: "batch-low"
+   ```
+
+3. **Priority threshold for reclaim within Cohort ([Issue #12046](https://github.com/kubernetes-sigs/kueue/issues/12046)):**
+   Reclaim borrowed capacity within the cohort only from candidates matching a specific priority class:
+   ```yaml
+   spec:
+     rules:
+       - name: reclaim-cohort-quota-from-low-priority
+         trigger: "QuotaReclaimRequired"
+         candidateSelectors:
+           - relationRequirement: "SameCohort"
+             quota: "BorrowingCapacityFromPreemptor"
+             candidateWorkloadPrioritySelector:
+               matchLabels:
+                 kueue.x-k8s.io/priority-class: "batch-low"
+   ```
+
+4. **SLA protection based on workload creation time:**
+   Model SLA requirements by only preempting recently created workloads (e.g., created less than 1 hour ago) to avoid preemption of older workloads nearing SLA completion deadlines:
+   ```yaml
+   spec:
+     rules:
+       - name: preempt-recent-workloads-only
+         trigger: "InsufficientQuota"
+         candidateSelectors:
+           - relationRequirement: "SameClusterQueue"
+             relativeWorkloadPriority: "Lower"
+             maxTimeFromCreationDuration: "1h"
+   ```
 
 ### Notes
 
@@ -1368,7 +1430,8 @@ In future work, users would be able to configure explicit candidate ordering in 
 ```yaml
 spec:
   rules:
-    - trigger: "InsufficientTopology"
+    - name: defrag-smaller-tpu-workloads
+      trigger: "InsufficientTopology"
       minTriggerRequiredDuration: "30s"
       candidateSelectors:
         - relativeWorkloadPriority: "LowerOrEqual"
@@ -1376,7 +1439,7 @@ spec:
           numericLabels:
             - key: "tpus-count"
               relation: "Lower"
-              default: 0
+              defaultValue: 0
   ordering:
     - orderingField: "Priority"
       direction: "Ascending"
@@ -1387,11 +1450,13 @@ spec:
 ```yaml
 spec:
   rules:
-    - trigger: "InsufficientTopology"
+    - name: hero-reclaim-topology
+      trigger: "InsufficientTopology"
       candidateSelectors:
         - relativeWorkloadPriority: "Lower"
           relationRequirement: "AnyClusterQueue"
-    - trigger: "InsufficientQuota"
+    - name: hero-reclaim-quota
+      trigger: "InsufficientQuota"
       candidateSelectors:
         - relativeWorkloadPriority: "Lower"
           relationRequirement: "AnyClusterQueue"
