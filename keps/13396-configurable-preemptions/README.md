@@ -1,7 +1,6 @@
 # KEP-13396: Configurable Preemptions
 
 <!-- toc -->
-
 - [Summary](#summary)
 - [Motivation](#motivation)
   - [1. Defragmentation](#1-defragmentation)
@@ -11,6 +10,7 @@
   - [Goals](#goals)
   - [Non-Goals](#non-goals)
 - [Proposal](#proposal)
+    - [Referencing PreemptionConfig &amp; Strategy Interaction](#referencing-preemptionconfig--strategy-interaction)
   - [User Stories](#user-stories)
     - [Story 1 - Defragmentation](#story-1---defragmentation)
     - [Story 2 - Hero job](#story-2---hero-job)
@@ -56,8 +56,12 @@
     - [Examples with Custom Ordering](#examples-with-custom-ordering)
       - [Story 1 - Defragmentation with Explicit Priority Ordering](#story-1---defragmentation-with-explicit-priority-ordering)
       - [Story 2 - Hero Workload with Explicit Priority Ordering](#story-2---hero-workload-with-explicit-priority-ordering)
-  - [Time-Based Candidate Selectors (Execution and Creation Duration)](#time-based-candidate-selectors-execution-and-creation-duration) - [Proposed API for Time-Based Candidate Selectors](#proposed-api-for-time-based-candidate-selectors) - [Examples with Time-Based Candidate Selectors](#examples-with-time-based-candidate-selectors) - [Example 1 - Minimal Execution Duration Before Preemption](#example-1---minimal-execution-duration-before-preemption) - [Example 2 - SLA Protection Based on Workload Creation Time](#example-2---sla-protection-based-on-workload-creation-time)
-  <!-- /toc -->
+  - [Time-Based Candidate Selectors (Execution and Creation Duration)](#time-based-candidate-selectors-execution-and-creation-duration)
+    - [Proposed API for Time-Based Candidate Selectors](#proposed-api-for-time-based-candidate-selectors)
+    - [Examples with Time-Based Candidate Selectors](#examples-with-time-based-candidate-selectors)
+      - [Story 1 - Minimal Execution Duration Before Preemption](#story-1---minimal-execution-duration-before-preemption)
+      - [Story 2 - SLA Protection Based on Workload Creation Time](#story-2---sla-protection-based-on-workload-creation-time)
+<!-- /toc -->
 
 ## Summary
 
