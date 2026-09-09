@@ -452,15 +452,39 @@ Requested functionalities from the community can be satisfied with the following
              maxTimeFromCreationDuration: "1h"
    ```
 
+5. **Resource requests/limits based preemption (filtering by resource size):**
+   Protect large, long-running batch workloads from preemption by ensuring only "small" workloads (e.g. workloads requesting at most 8 GPUs or 32 CPU cores) are eligible as preemption candidates using custom numeric labels with `maxValue`:
+   ```yaml
+   spec:
+     rules:
+       - name: preempt-small-resource-workloads
+         trigger: "InsufficientQuota"
+         candidateSelectors:
+           - relationRequirement: "SameClusterQueue"
+             relativeWorkloadPriority: "Lower"
+             numericLabels:
+               - key: "requested-gpus"
+                 maxValue: 8
+   ```
+
+6. **Advanced topology comparison (matching podset required levels):**
+   Ensure preemption only targets workloads that match or fall within specific topology domains or required podset levels (e.g., only preempt workloads constrained to the same `rack` domain) using `workloadSelector` or numeric label relations:
+   ```yaml
+   spec:
+     rules:
+       - name: preempt-same-topology-level-workloads
+         trigger: "InsufficientTopology"
+         candidateSelectors:
+           - relationRequirement: "SameCohort"
+             relativeWorkloadPriority: "LowerOrEqual"
+             workloadSelector:
+               matchLabels:
+                 kueue.x-k8s.io/topology-level: "rack"
+   ```
+
 ### Notes
 
-There are many possible extensions of the proposed selectors in the rules. For now, we propose to support only those that seem most common and natural, but the design allows for extensibility. Examples of possible extensions include:
-
-- advanced topology comparison selectors extending custom numeric label based selector — e.g. "require same podset required levels for considered workloads",
-- resource requests/limits based selectors — "only preempt workloads that request less than X amount of resources",
-- detection of misconfigurations causing preemption cycles.
-
-As the scope of the design is already broad, we leave them as a separate implementation effort and not part of the initial KEP proposal.
+There are many possible extensions of the proposed selectors in the rules. For now, we propose to support only those that seem most common and natural, but the design allows for extensibility.
 
 ### Constraints
 
@@ -659,9 +683,6 @@ type PreemptionCandidateSelector struct {
 
   // Accepts all if not set
   WorkloadSelector metav1.LabelSelector
-
-  // Accepts all if not set
-  HostNodeSelector metav1.LabelSelector
 
   // Matches all workload priority classes if not set.
   PreemptingWorkloadPrioritySelector metav1.LabelSelector
