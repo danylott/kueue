@@ -27,15 +27,8 @@
     - [Default Candidate Ordering](#default-candidate-ordering)
   - [Preemption evaluation flow in scheduler](#preemption-evaluation-flow-in-scheduler)
     - [Step-by-Step Breakdown](#step-by-step-breakdown)
-  - [Efficient iteration through candidates in preemption order](#efficient-iteration-through-candidates-in-preemption-order)
-    - [Problem Statement](#problem-statement)
-    - [Naive Solutions and Complexity Bottlenecks](#naive-solutions-and-complexity-bottlenecks)
-    - [Proposed Approach: Per-Selector, Per-CQ Priority Queues](#proposed-approach-per-selector-per-cq-priority-queues)
-    - [Example Walkthrough](#example-walkthrough)
-    - [Implementation Caveats and Selector Isolation](#implementation-caveats-and-selector-isolation)
-    - [Complexity of the Proposed Solution](#complexity-of-the-proposed-solution)
-    - [Complexity Comparison](#complexity-comparison)
-    - [Open Challenges](#open-challenges)
+  - [Candidate Organization: Per-Selector, Per-CQ Priority Queues](#candidate-organization-per-selector-per-cq-priority-queues)
+    - [Architectural Groundwork for Configurable Candidate Ordering](#architectural-groundwork-for-configurable-candidate-ordering)
   - [Observability](#observability)
   - [Test Plan](#test-plan)
     - [Unit tests](#unit-tests)
@@ -54,6 +47,15 @@
     - [Examples with Custom Ordering](#examples-with-custom-ordering)
       - [Story 1 - Defragmentation with Explicit Priority Ordering](#story-1---defragmentation-with-explicit-priority-ordering)
       - [Story 2 - Hero Workload with Explicit Priority Ordering](#story-2---hero-workload-with-explicit-priority-ordering)
+    - [Efficient Iteration Through Candidates in Preemption Order](#efficient-iteration-through-candidates-in-preemption-order)
+      - [Problem Statement](#problem-statement)
+      - [Naive Solutions and Complexity Bottlenecks](#naive-solutions-and-complexity-bottlenecks)
+      - [Proposed Approach: Multi-Queue Dynamic Iteration](#proposed-approach-multi-queue-dynamic-iteration)
+      - [Example Walkthrough](#example-walkthrough)
+      - [Implementation Caveats and Selector Isolation](#implementation-caveats-and-selector-isolation)
+      - [Complexity Analysis](#complexity-analysis)
+      - [Complexity Comparison](#complexity-comparison)
+      - [Open Challenges](#open-challenges)
   - [Time-Based Candidate Selectors (Execution and Creation Duration)](#time-based-candidate-selectors-execution-and-creation-duration)
     - [Proposed API for Time-Based Candidate Selectors](#proposed-api-for-time-based-candidate-selectors)
     - [Examples with Time-Based Candidate Selectors](#examples-with-time-based-candidate-selectors)
@@ -910,148 +912,22 @@ flowchart TD
 
 `CandidatesQuotaAndTopologyUpperLimit` by design is just an approximation to allow for short-circuiting when the preemptor obviously will not be admitted anyway. It will just use the initial state of the `PreemptionEvaluator` and does not attempt to simulate changes in DRS or borrowing during iteration over candidates. However, the returned values should always be greater than or equal to what can be preempted at this moment, so it is reasonable to avoid heavy simulation if the result is smaller than the requested amount.
 
-### Efficient iteration through candidates in preemption order
+### Candidate Organization: Per-Selector, Per-CQ Priority Queues
 
-#### Problem Statement
+In the initial iteration of `PreemptionConfig`, candidate workloads are evaluated according to the default preemption ordering rules (reusing the established ordering logic from classical preemption and fair sharing: workloads marked for eviction first, workloads from other ClusterQueues before the preemptor's ClusterQueue, fair-sharing usage, priority, admission timestamp, and UID tiebreaker).
 
-Certain preemption candidate rules—such as those based on `BorrowingCapacityFromPreemptor` or Dominant Resource Share (DRS) fair-sharing strategies—depend on dynamic cluster state that changes as candidate workloads are simulated for preemption during evaluation.
+Rather than pooling all candidate workloads across the cluster into a single unstructured list, the evaluator organizes candidate workloads into **separate priority queues partitioned by `(CandidateSelector, ClusterQueue)`**.
 
-For example, consider cluster queues A and B, each with a nominal quota of 5. Suppose CQ B is currently borrowing 1 unit of quota from CQ A. If a workload in CQ A triggers preemption under a rule targeting only borrowing workloads, and each candidate workload in CQ B consumes 1 unit of quota, the evaluator should only preempt a single workload from CQ B. Once that first workload is selected, CQ B is no longer borrowing quota from CQ A, so remaining workloads in CQ B must immediately become ineligible for that borrowing rule.
+#### Architectural Groundwork for Configurable Candidate Ordering
 
-Furthermore, dynamic cluster metrics (such as DRS in fair-sharing cohorts) mean that preemption eligibility and relative candidate ordering across cluster queues can shift after every candidate selection step.
+The sophisticated dynamic candidate iteration algorithm described in [Efficient Iteration Through Candidates in Preemption Order](#efficient-iteration-through-candidates-in-preemption-order) is only strictly relevant when introducing [Configurable Candidate Ordering](#configurable-candidate-ordering) (deferred to future work), where distinct comparator chains and dynamic multi-queue iteration come into play. However, it sets the ground as to why we should already adopt **Per-Selector, Per-CQ Priority Queues** in the first iteration:
 
-#### Naive Solutions and Complexity Bottlenecks
+1. **Enabling Future Integration**: When configurable candidate ordering is introduced in future iterations, candidate workloads will need to be evaluated and compared across distinct queues dynamically according to user-defined comparator chains. Establishing per-selector, per-CQ queue data structures in the initial release ensures that configurable ordering can be integrated seamlessly without re-architecting Kueue's candidate selection pipeline.
+2. **Static Intra-Queue Ordering (Sort Once)**: Within any given ClusterQueue, relative candidate ordering under the default rules is static and unaffected by dynamic cluster state. Sorting each queue independently once at the start of preemption evaluation ($O(\frac{n}{c} \log \frac{n}{c})$ per queue) avoids expensive full-array re-sorting during candidate iteration.
+3. **Fast CQ-Level Pruning**: Dynamic cluster properties—such as current borrowed quota—can be tracked at the queue level. When a ClusterQueue exhausts its borrowing capacity, its entire priority queue under that borrowing selector is immediately pruned from consideration.
+4. **Selector Isolation**: Maintaining distinct queues per selector ensures that dropping an ineligible queue under a borrowing selector does not inadvertently discard candidates from the same ClusterQueue that remain eligible under static selectors (such as priority-only preemption within the same CQ).
+5. **Deduplication & Preemption Justification**: Workloads matching multiple selectors (across one or more rules) reside at the heads of multiple queues (held via shared references) and are popped simultaneously when selected. This multi-queue membership directly identifies all matching candidate selectors and rules, providing precise metadata for preemption justification in workload status conditions and audit logs (see [Observability](#observability)).
 
-Let:
-
-- $n$: total number of candidate workloads across all cluster queues in the cohort.
-- $c$: number of cluster queues in the cohort, with $c \ll n$.
-- $s$: number of candidate selectors configured in `PreemptionConfig` rules, with $s \le 5$.
-- $m$: number of victim workloads required to satisfy the preemptor, with $m \le n$.
-
-Under dynamic state changes:
-
-- **Naive Linear Filtering per Selection** (`O(m · n)` to `O(n²)`): Dynamically filtering the candidate set and linearly scanning for the minimum at each of the $m$ preemption steps requires $O(n)$ work per step, yielding $O(m \cdot n)$ time (up to $O(n^2)$ in the worst case where $m \approx n$).
-- **Naive Dynamic Re-sorting** (`O(m · n log n)` to `O(n² log n)`): Naively re-sorting the candidate array whenever CQ borrowing or DRS metrics change introduces an $O(n \log n)$ sorting step per eviction, leading to $O(m \cdot n \log n)$ time and severe scheduler throughput degradation.
-
-#### Proposed Approach: Per-Selector, Per-CQ Priority Queues
-
-To achieve optimal scheduling performance without repetitive full-array scans or re-sorting, the evaluator maintains **separate priority queues partitioned by `(CandidateSelector, ClusterQueue)`**:
-
-1. **Static Intra-Queue Ordering (Sort Once):**
-   Within any given cluster queue, relative candidate ordering (e.g., by Priority, `AdmissionTimestamp`, Workload UID) is static and unaffected by dynamic quota borrowing or DRS changes. Therefore, candidate workloads within each `(Selector, CQ)` queue need to be sorted only once at the start of evaluation.
-
-2. **CQ-Level State Tracking & Fast Pruning:**
-   Dynamic state—such as current borrowed quota and cluster queue DRS—is tracked via lightweight counters attached to each CQ queue. When a CQ property no longer satisfies the selector's criteria (e.g., borrowed quota reaches zero for borrowing selectors), the entire priority queue for that CQ under that selector is pruned from consideration.
-
-3. **Handling Workload-Specific Constraints (`DRSLessThanOrEqualToFinalShare`):**
-   For selectors requiring workload-level evaluation (such as `DRSLessThanOrEqualToFinalShare`), the entire queue cannot simply be dropped at the CQ level because eligibility depends on the individual workload's DRS value. For these selectors, candidates are evaluated at extraction time when inspected at the queue head. If a candidate violates the fair-sharing constraint under current simulated state, it is popped and discarded for that selector.
-
-4. **Multi-Queue Head Selection:**
-   At each preemption step, the evaluator inspects the heads of all active priority queues and selects the globally minimal candidate according to the default preemption ordering rules.
-
-5. **Deduplication & Multi-Queue Popping:**
-   A single workload can match multiple candidate selectors (across one or more preemption rules) and thus reside in multiple priority queues. Because the ordering comparator is consistent across queues, the selected minimal workload will always be at the head of all its corresponding queues. When chosen, it is popped from all matching queue heads simultaneously. Workloads are stored as shared pointers/references across queues to eliminate data duplication.
-
-6. **Visibility and Preemption Justification:**
-   The set of priority queues from which a workload was popped directly identifies all matching candidate selectors and rules, providing immediate justification and audit metadata for the preemption decision (see [Observability](#observability)).
-
-7. **Simulated State Updates:**
-   After popping a candidate, the evaluator updates simulated state (reclaimed quota, updated DRS counters) and drops any newly ineligible CQ priority queues before the next selection step.
-
-#### Example Walkthrough
-
-Consider three cluster queues (CQ A, CQ B, and CQ C) in a flat cohort, each with 2 admitted workloads:
-
-- **Workloads & Priorities**:
-  - Preemptor: Workload A3 in ClusterQueue A, Priority = 40.
-  - Candidates in CQ A: A1 (Priority = 20), A2 (Priority = 50).
-  - Candidates in CQ B: B1 (Priority = 5), B2 (Priority = 10).
-  - Candidates in CQ C: C1 (Priority = 30), C2 (Priority = 60).
-- **Rules & Candidate Ordering**:
-  - Candidates are evaluated according to default preemption ordering rules (lower priority workloads preempted first).
-  - _Rule 1 (Priority-based, intra-CQ)_: Preempt workloads within the same CQ (CQ A) with strictly lower priority than the preemptor (priority < 40). Candidate matching: Workload A1 (Priority 20).
-  - _Rule 2 (Fair Sharing, inter-CQ)_: Preempt workloads from any ClusterQueue whose DRS exceeds its fair share.
-
-Now, workload A3 arrives in ClusterQueue A and requires preemption to be admitted:
-
-1. **Queue Initialization (2 selectors × 3 ClusterQueues = 6 priority queues)**:
-   - For the priority selector (Rule 1), DRS is ignored; these queues only contain workloads passing the static priority filter and intra-CQ constraint (Workload A1).
-   - For the fair sharing selector (Rule 2), cohort DRS is evaluated dynamically for each CQ:
-     - ClusterQueue B is borrowing and heavily exceeds fair share $\implies$ Workloads B1 and B2 are eligible.
-     - ClusterQueue C is currently within its fair share $\implies$ Workloads C1 and C2 are **ineligible** under Rule 2, and do not match Rule 1 (different CQ). Thus, queues for CQ C are initially inactive/empty.
-
-2. **Candidate Selection (Workloads B1, B2, A1)**:
-   - The evaluator inspects the heads of all active priority queues and selects the candidate with the lowest priority.
-   - First, it selects candidate **B1** (Priority 5), then candidate **B2** (Priority 10). As the cohort structure is flat, evicting B1 and B2 does not alter CQ C's fair-share status.
-   - Next, the evaluator selects candidate **A1** (Priority 20). Because preemption within the same ClusterQueue is also considered fair under fair-sharing rules, A1 matches both Rule 1 and Rule 2, and is popped simultaneously from both queues representing ClusterQueue A.
-
-3. **Dynamic State Recomputation & Selection of Workload C1**:
-   - Simulating the preemption of A1 reduces ClusterQueue A's resource usage, which shifts the cohort fair-share baseline. Under the updated DRS values, ClusterQueue C now exceeds its fair share!
-   - Consequently, the priority queue for ClusterQueue C under Rule 2 becomes active, making C1 (Priority 30) eligible for preemption.
-   - The evaluator inspects active queue heads (C1 at 30 vs A2 at 50, C2 at 60) and selects candidate **C1** (Priority 30) as the lowest-priority eligible candidate.
-   - _(Note: Without dynamic state recomputation, C1 would have been prematurely excluded or would have required a full scan of all cluster workloads.)_
-
-4. **Termination**:
-   - Workload A3 resource requirements can now be satisfied after selecting {B1, B2, A1, C1}. Candidate iteration terminates, and the scheduler proceeds to reverse-order backfilling.
-
-#### Implementation Caveats and Selector Isolation
-
-Maintaining separate priority queues per candidate selector is essential. If queues were pooled across selectors (either within a rule or across rules), dropping an ineligible CQ queue due to exhausted borrowing or DRS thresholds would inadvertently discard candidates that matched other non-borrowing, static selectors (such as priority-only preemption within the same CQ). Distinct per-selector queues permit aggressive filtering using static constraints up front while isolating dynamic state invalidation.
-
-#### Complexity of the Proposed Solution
-
-To evaluate algorithmic efficiency under realistic cluster conditions:
-
-- $n$: total number of candidate workloads across all cluster queues in the cohort.
-- $c$: number of cluster queues in the cohort, with $c \ll n$.
-- $s$: number of candidate selectors configured in the `PreemptionConfig`, with $s \le 5$.
-- $m$: number of victim workloads required to admit the preemptor, with $m \le n$.
-
-Assuming workloads are roughly evenly distributed across cluster queues (approximately $n/c$ workloads per queue):
-
-1. **Queue Initialization & Sorting**:
-   - The algorithm instantiates at most $s \times c$ priority queues.
-   - Sorting each queue of size $n/c$ takes $O(\frac{n}{c} \log \frac{n}{c})$. Across all $s \times c$ queues:
-
-     $$\sum_{i=1}^{s \times c} O\left(\frac{n}{c} \log \frac{n}{c}\right) = s \cdot c \cdot O\left(\frac{n}{c} \log \frac{n}{c}\right) = O\left(s \cdot n \log\left(\frac{n}{c}\right)\right)$$
-
-   - Since $\log(n/c) \le \log n$, this is bounded by standard $O(s \cdot n \log n)$.
-
-2. **Victim Selection & Dynamic Updates**:
-   - At each selection step, finding the globally minimal candidate takes $O(c \cdot s)$ time to inspect the heads of all active queues.
-   - Popping $m$ victim workloads requires $O(m \cdot c \cdot s)$ comparisons.
-   - Updating simulated resource allocations and DRS values per victim takes $O(1)$ on a flat cohort structure.
-
-3. **Overall Time Complexity**:
-
-   $$T = O(s \cdot n \log n + m \cdot c \cdot s)$$
-
-   Treating the number of selectors $s$ as a small constant, with $s = O(1)$, the overall complexity simplifies to:
-
-   $$O(n \log n + m \cdot c)$$
-
-#### Complexity Comparison
-
-| Algorithm                              | Per-Step Selection Time     | Total Selection Time (for $m$ victims) | Overall Algorithm Time   | Scalability Bottleneck                                                        |
-| -------------------------------------- | --------------------------- | -------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
-| **Naive Linear Filtering**             | $O(n)$                      | $O(m \cdot n)$                         | $O(m \cdot n)$           | High per-step scan overhead when $n$ is large.                                |
-| **Naive Dynamic Re-sorting**           | $O(n \log n)$               | $O(m \cdot n \log n)$                  | $O(m \cdot n \log n)$    | Severe throughput degradation on frequent evictions.                          |
-| **Proposed Per-(Selector, CQ) Queues** | $O(c \cdot s) \approx O(c)$ | $O(m \cdot c)$                         | **`O(n log n + m · c)`** | Scales with number of ClusterQueues $c$, independent of $n$ during selection. |
-
-Because in real clusters the number of ClusterQueues is much smaller than the total number of workloads (where $c \ll n$, e.g. dozens of queues vs. thousands of workloads), where $m \cdot c \ll m \cdot n$. The proposed multi-queue approach eliminates repetitive scans and re-sorting, ensuring scalable preemption evaluation.
-
-#### Open Challenges
-
-**Challenge 1** — how to handle the situation where workloads are preempted from the preemptor CQ, which makes previously removed workloads viable again — [issue #14122](https://github.com/kubernetes-sigs/kueue/issues/14122).
-
-**Vague implementation idea** — keep track of workloads that are dropped because of DRS in the appropriate order and re-evaluate them (when a whole CQ is dropped because of DRS, save all of the workloads from it).
-
-**Challenge 2** — how to make sure that preemptions are fair even if we backfill some workloads. The algorithm described above is fair if no backfilling is happening, but if we preempt and then backfill it can lead to issues as described in [issue #14543](https://github.com/kubernetes-sigs/kueue/issues/14543).
-
-**Vague implementation idea** — when backfilling, hold the required values (attached to the CQs or in a cohort-tree-like struct) to make preemption of suffix workloads still fair according to the DRS rules. If backfilling changes the DRS in a way that makes the "fairness" rule no longer true for suffix workloads, then do not reintroduce them.
-As stricter backfilling can lead to lower cluster utilization (a trade-off with fairness), this should probably be introduced as an additional preemption config parameter (boolean flag).
-There are some additional caveats that should be addressed — for example, what if suffix candidate preemption is still possible because other non-DRS rules allow it? Then we should probably allow backfilling of the workloads, but this may lead to a change in the ordering of the candidates. For simplicity, it may be worth documenting as a known limitation that candidates are only ordered once according to the original plan and not reordered during backfilling.
 
 ### Observability
 
@@ -1437,6 +1313,148 @@ spec:
     - orderingField: "Priority"
       direction: "Ascending"
 ```
+
+#### Efficient Iteration Through Candidates in Preemption Order
+
+As established in [Candidate Organization: Per-Selector, Per-CQ Priority Queues](#candidate-organization-per-selector-per-cq-priority-queues), the first iteration already organizes candidate workloads into per-selector, per-CQ priority queues to set the architectural ground for configurable candidate ordering. When configurable candidate ordering is introduced with custom comparator chains and dynamic ordering metrics (such as DRS), preemption evaluation requires an efficient iteration algorithm across these queues to avoid prohibitive performance degradation.
+
+##### Problem Statement
+
+Certain preemption candidate rules—such as those based on `BorrowingCapacityFromPreemptor` or Dominant Resource Share (DRS) fair-sharing strategies—depend on dynamic cluster state that changes as candidate workloads are simulated for preemption during evaluation.
+
+For example, consider cluster queues A and B, each with a nominal quota of 5. Suppose CQ B is currently borrowing 1 unit of quota from CQ A. If a workload in CQ A triggers preemption under a rule targeting only borrowing workloads, and each candidate workload in CQ B consumes 1 unit of quota, the evaluator should only preempt a single workload from CQ B. Once that first workload is selected, CQ B is no longer borrowing quota from CQ A, so remaining workloads in CQ B must immediately become ineligible for that borrowing rule.
+
+Furthermore, dynamic cluster metrics (such as DRS in fair-sharing cohorts) mean that preemption eligibility and relative candidate ordering across cluster queues can shift after every candidate selection step.
+
+##### Naive Solutions and Complexity Bottlenecks
+
+Let:
+
+- $n$: total number of candidate workloads across all cluster queues in the cohort.
+- $c$: number of cluster queues in the cohort, with $c \ll n$.
+- $s$: number of candidate selectors configured in `PreemptionConfig` rules, with $s \le 5$.
+- $m$: number of victim workloads required to satisfy the preemptor, with $m \le n$.
+
+Under dynamic state changes:
+
+- **Naive Linear Filtering per Selection** (`O(m · n)` to `O(n²)`): Dynamically filtering the candidate set and linearly scanning for the minimum at each of the $m$ preemption steps requires $O(n)$ work per step, yielding $O(m \cdot n)$ time (up to $O(n^2)$ in the worst case where $m \approx n$).
+- **Naive Dynamic Re-sorting** (`O(m · n log n)` to `O(n² log n)`): Naively re-sorting the candidate array whenever CQ borrowing or DRS metrics change introduces an $O(n \log n)$ sorting step per eviction, leading to $O(m \cdot n \log n)$ time and severe scheduler throughput degradation.
+
+##### Proposed Approach: Multi-Queue Dynamic Iteration
+
+Leveraging the **Per-Selector, Per-CQ Priority Queues** established in the first iteration, the evaluator achieves optimal scheduling performance without repetitive full-array scans or re-sorting:
+
+1. **Static Intra-Queue Ordering (Sort Once):**
+   Within any given cluster queue, relative candidate ordering (e.g., by Priority, `AdmissionTimestamp`, Workload UID) is static and unaffected by dynamic quota borrowing or DRS changes. Therefore, candidate workloads within each `(Selector, CQ)` queue need to be sorted only once at the start of evaluation.
+
+2. **CQ-Level State Tracking & Fast Pruning:**
+   Dynamic state—such as current borrowed quota and cluster queue DRS—is tracked via lightweight counters attached to each CQ queue. When a CQ property no longer satisfies the selector's criteria (e.g., borrowed quota reaches zero for borrowing selectors), the entire priority queue for that CQ under that selector is pruned from consideration.
+
+3. **Handling Workload-Specific Constraints (`DRSLessThanOrEqualToFinalShare`):**
+   For selectors requiring workload-level evaluation (such as `DRSLessThanOrEqualToFinalShare`), the entire queue cannot simply be dropped at the CQ level because eligibility depends on the individual workload's DRS value. For these selectors, candidates are evaluated at extraction time when inspected at the queue head. If a candidate violates the fair-sharing constraint under current simulated state, it is popped and discarded for that selector.
+
+4. **Multi-Queue Head Selection:**
+   At each preemption step, the evaluator inspects the heads of all active priority queues and selects the globally minimal candidate according to the configured ordering comparator chain.
+
+5. **Deduplication & Multi-Queue Popping:**
+   A single workload can match multiple candidate selectors (across one or more preemption rules) and thus reside in multiple priority queues. Because the ordering comparator is consistent across queues, the selected minimal workload will always be at the head of all its corresponding queues. When chosen, it is popped from all matching queue heads simultaneously. Workloads are stored as shared pointers/references across queues to eliminate data duplication.
+
+6. **Simulated State Updates:**
+   After popping a candidate, the evaluator updates simulated state (reclaimed quota, updated DRS counters) and drops any newly ineligible CQ priority queues before the next selection step.
+
+##### Example Walkthrough
+
+Consider three cluster queues (CQ A, CQ B, and CQ C) in a flat cohort, each with 2 admitted workloads:
+
+- **Workloads & Priorities**:
+  - Preemptor: Workload A3 in ClusterQueue A, Priority = 40.
+  - Candidates in CQ A: A1 (Priority = 20), A2 (Priority = 50).
+  - Candidates in CQ B: B1 (Priority = 5), B2 (Priority = 10).
+  - Candidates in CQ C: C1 (Priority = 30), C2 (Priority = 60).
+- **Rules & Candidate Ordering**:
+  - Candidates are evaluated according to the configured ordering comparator chain (e.g. lower priority workloads preempted first).
+  - _Rule 1 (Priority-based, intra-CQ)_: Preempt workloads within the same CQ (CQ A) with strictly lower priority than the preemptor (priority < 40). Candidate matching: Workload A1 (Priority 20).
+  - _Rule 2 (Fair Sharing, inter-CQ)_: Preempt workloads from any ClusterQueue whose DRS exceeds its fair share.
+
+Now, workload A3 arrives in ClusterQueue A and requires preemption to be admitted:
+
+1. **Queue Initialization (2 selectors × 3 ClusterQueues = 6 priority queues)**:
+   - For the priority selector (Rule 1), DRS is ignored; these queues only contain workloads passing the static priority filter and intra-CQ constraint (Workload A1).
+   - For the fair sharing selector (Rule 2), cohort DRS is evaluated dynamically for each CQ:
+     - ClusterQueue B is borrowing and heavily exceeds fair share $\implies$ Workloads B1 and B2 are eligible.
+     - ClusterQueue C is currently within its fair share $\implies$ Workloads C1 and C2 are **ineligible** under Rule 2, and do not match Rule 1 (different CQ). Thus, queues for CQ C are initially inactive/empty.
+
+2. **Candidate Selection (Workloads B1, B2, A1)**:
+   - The evaluator inspects the heads of all active priority queues and selects the candidate with the lowest priority.
+   - First, it selects candidate **B1** (Priority 5), then candidate **B2** (Priority 10). As the cohort structure is flat, evicting B1 and B2 does not alter CQ C's fair-share status.
+   - Next, the evaluator selects candidate **A1** (Priority 20). Because preemption within the same ClusterQueue is also considered fair under fair-sharing rules, A1 matches both Rule 1 and Rule 2, and is popped simultaneously from both queues representing ClusterQueue A.
+
+3. **Dynamic State Recomputation & Selection of Workload C1**:
+   - Simulating the preemption of A1 reduces ClusterQueue A's resource usage, which shifts the cohort fair-share baseline. Under the updated DRS values, ClusterQueue C now exceeds its fair share!
+   - Consequently, the priority queue for ClusterQueue C under Rule 2 becomes active, making C1 (Priority 30) eligible for preemption.
+   - The evaluator inspects active queue heads (C1 at 30 vs A2 at 50, C2 at 60) and selects candidate **C1** (Priority 30) as the lowest-priority eligible candidate.
+   - _(Note: Without dynamic state recomputation, C1 would have been prematurely excluded or would have required a full scan of all cluster workloads.)_
+
+4. **Termination**:
+   - Workload A3 resource requirements can now be satisfied after selecting {B1, B2, A1, C1}. Candidate iteration terminates, and the scheduler proceeds to reverse-order backfilling.
+
+##### Implementation Caveats and Selector Isolation
+
+Maintaining separate priority queues per candidate selector is essential. If queues were pooled across selectors (either within a rule or across rules), dropping an ineligible CQ queue due to exhausted borrowing or DRS thresholds would inadvertently discard candidates that matched other non-borrowing, static selectors (such as priority-only preemption within the same CQ). Distinct per-selector queues permit aggressive filtering using static constraints up front while isolating dynamic state invalidation.
+
+##### Complexity Analysis
+
+To evaluate algorithmic efficiency under realistic cluster conditions:
+
+- $n$: total number of candidate workloads across all cluster queues in the cohort.
+- $c$: number of cluster queues in the cohort, with $c \ll n$.
+- $s$: number of candidate selectors configured in the `PreemptionConfig`, with $s \le 5$.
+- $m$: number of victim workloads required to admit the preemptor, with $m \le n$.
+
+Assuming workloads are roughly evenly distributed across cluster queues (approximately $n/c$ workloads per queue):
+
+1. **Queue Initialization & Sorting**:
+   - The algorithm instantiates at most $s \times c$ priority queues.
+   - Sorting each queue of size $n/c$ takes $O(\frac{n}{c} \log \frac{n}{c})$. Across all $s \times c$ queues:
+
+     $$\sum_{i=1}^{s \times c} O\left(\frac{n}{c} \log \frac{n}{c}\right) = s \cdot c \cdot O\left(\frac{n}{c} \log \frac{n}{c}\right) = O\left(s \cdot n \log\left(\frac{n}{c}\right)\right)$$
+
+   - Since $\log(n/c) \le \log n$, this is bounded by standard $O(s \cdot n \log n)$.
+
+2. **Victim Selection & Dynamic Updates**:
+   - At each selection step, finding the globally minimal candidate takes $O(c \cdot s)$ time to inspect the heads of all active queues.
+   - Popping $m$ victim workloads requires $O(m \cdot c \cdot s)$ comparisons.
+   - Updating simulated resource allocations and DRS values per victim takes $O(1)$ on a flat cohort structure.
+
+3. **Overall Time Complexity**:
+
+   $$T = O(s \cdot n \log n + m \cdot c \cdot s)$$
+
+   Treating the number of selectors $s$ as a small constant, with $s = O(1)$, the overall complexity simplifies to:
+
+   $$O(n \log n + m \cdot c)$$
+
+##### Complexity Comparison
+
+| Algorithm                              | Per-Step Selection Time     | Total Selection Time (for $m$ victims) | Overall Algorithm Time   | Scalability Bottleneck                                                        |
+| -------------------------------------- | --------------------------- | -------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
+| **Naive Linear Filtering**             | $O(n)$                      | $O(m \cdot n)$                         | $O(m \cdot n)$           | High per-step scan overhead when $n$ is large.                                |
+| **Naive Dynamic Re-sorting**           | $O(n \log n)$               | $O(m \cdot n \log n)$                  | $O(m \cdot n \log n)$    | Severe throughput degradation on frequent evictions.                          |
+| **Proposed Per-(Selector, CQ) Queues** | $O(c \cdot s) \approx O(c)$ | $O(m \cdot c)$                         | **`O(n log n + m · c)`** | Scales with number of ClusterQueues $c$, independent of $n$ during selection. |
+
+Because in real clusters the number of ClusterQueues is much smaller than the total number of workloads (where $c \ll n$, e.g. dozens of queues vs. thousands of workloads), where $m \cdot c \ll m \cdot n$. The multi-queue approach eliminates repetitive scans and re-sorting, ensuring scalable preemption evaluation.
+
+##### Open Challenges
+
+**Challenge 1** — how to handle the situation where workloads are preempted from the preemptor CQ, which makes previously removed workloads viable again — [issue #14122](https://github.com/kubernetes-sigs/kueue/issues/14122).
+
+**Vague implementation idea** — keep track of workloads that are dropped because of DRS in the appropriate order and re-evaluate them (when a whole CQ is dropped because of DRS, save all of the workloads from it).
+
+**Challenge 2** — how to make sure that preemptions are fair even if we backfill some workloads. The algorithm described above is fair if no backfilling is happening, but if we preempt and then backfill it can lead to issues as described in [issue #14543](https://github.com/kubernetes-sigs/kueue/issues/14543).
+
+**Vague implementation idea** — when backfilling, hold the required values (attached to the CQs or in a cohort-tree-like struct) to make preemption of suffix workloads still fair according to the DRS rules. If backfilling changes the DRS in a way that makes the "fairness" rule no longer true for suffix workloads, then do not reintroduce them.
+As stricter backfilling can lead to lower cluster utilization (a trade-off with fairness), this should probably be introduced as an additional preemption config parameter (boolean flag).
+There are some additional caveats that should be addressed — for example, what if suffix candidate preemption is still possible because other non-DRS rules allow it? Then we should probably allow backfilling of the workloads, but this may lead to a change in the ordering of the candidates. For simplicity, it may be worth documenting as a known limitation that candidates are only ordered once according to the original plan and not reordered during backfilling.
 
 ### Time-Based Candidate Selectors (Execution and Creation Duration)
 
