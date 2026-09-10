@@ -524,9 +524,9 @@ Given the extensive nature of **PreemptionConfigs** defined below, the API intro
 
 One inherent risk is users deploying ill-defined preemption configs that could lead to cluster instability (e.g. cascading preemptions). The design includes the following mitigations:
 
-1. **Rate-limiting guardrails** — cluster administrators can define preemption limits to roll out new configs or rules gradually (deferred to future work as `PreemptionLimit`).
-2. **Restrictive default preemption config** — By default, an empty config does not lead to any preemptions as candidate selection rules will be empty.
-3. **Documentation** — Comprehensive documentation will be provided to help users understand the risks and benefits of each configuration option, including examples of common preemption scenarios and how to configure them.
+1. **Restrictive default preemption config** — By default, an empty config does not lead to any preemptions as candidate selection rules will be empty.
+2. **Documentation** — Comprehensive documentation will be provided to help users understand the risks and benefits of each configuration option, including examples of common preemption scenarios and how to configure them.
+3. **Rate-limiting guardrails** — Cluster administrators can define preemption limits to roll out new configs or rules gradually (deferred to future work as `PreemptionLimit`).
 
 #### Performance degradation
 
