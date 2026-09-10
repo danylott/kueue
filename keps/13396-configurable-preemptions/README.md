@@ -10,7 +10,7 @@
   - [Goals](#goals)
   - [Non-Goals](#non-goals)
 - [Proposal](#proposal)
-    - [Referencing PreemptionConfig &amp; Strategy Interaction](#referencing-preemptionconfig--strategy-interaction)
+    - [Referencing PreemptionConfig and Strategy Interaction](#referencing-preemptionconfig-and-strategy-interaction)
   - [User Stories](#user-stories)
     - [Story 1 - Defragmentation](#story-1---defragmentation)
     - [Story 2 - Hero job](#story-2---hero-job)
@@ -282,7 +282,7 @@ In the initial iteration, candidate workloads are evaluated and ordered using th
 
 The **PreemptionConfig** object is a cluster-wide resource that can be referenced by multiple cluster queues.
 
-#### Referencing PreemptionConfig & Strategy Interaction
+#### Referencing PreemptionConfig and Strategy Interaction
 
 In Kueue, `ClusterQueue.spec.preemption` has declarative kubebuilder defaulting (`+kubebuilder:default={}`). Setting `preemption` to `null` or removing its declarative defaulting cannot be done without a breaking change for existing clients, manifests, and stored objects.
 
@@ -305,7 +305,7 @@ Therefore, the integration is designed with a two-phase evolution:
    - **Maximum flexibility and backwards compatibility**: This merged approach allows existing preemption behavior to function uninterrupted while layering new capabilities (like defragmentation). Furthermore, users can fully stop candidates from either mechanism if desired:
      - To stop classical preemption candidates, set `spec.preemption` policies to `Never` (for example, `reclaimWithinCohort: Never` and `withinClusterQueue: Never`).
      - To stop configurable preemption candidates, omit the annotation or specify rules with empty candidate selectors.
-   - Candidates from both mechanisms are merged, deduplicated, ordered using the default ordering rules, and evaluated against configured preemption limits.
+   - Candidates from both mechanisms are merged, deduplicated, and ordered using the default ordering rules to satisfy preemptor quota and topology requirements.
 
 2. **Beta+: Mutual Exclusivity & Feature Parity via Formal API Field**
    - In Beta+, `PreemptionConfig` and classical preemption will become **mutually exclusive**, with `PreemptionConfig` providing full **feature parity** with classical preemption (including borrowing reclaim, within-ClusterQueue preemption, and fair sharing).
@@ -573,7 +573,10 @@ type PreemptionConfig struct {
 
 type PreemptionConfigSpec struct {
   // Rules to select preemption candidates.
-  Rules []PreemptionRule
+  //
+  // +listType=map
+  // +listMapKey=name
+  Rules []PreemptionRule `json:"rules"`
 }
 
 // +kubebuilder:validation:Enum=InsufficientQuota;QuotaReclaimRequired;InsufficientTopology
@@ -609,7 +612,7 @@ type PreemptionRule struct {
   // using this rule. Accepts all workloads if not set.
   //
   // +optional
-  MatchingPreemptorWorkloads metav1.LabelSelector `json:"matchingPreemptorWorkloads,omitempty"`
+  MatchingPreemptorWorkloads *metav1.LabelSelector `json:"matchingPreemptorWorkloads,omitempty"`
 
   // Trigger specifies the condition (InsufficientQuota, QuotaReclaimRequired, or InsufficientTopology)
   // that must be observed on the preemptor workload for this rule to apply.
@@ -686,32 +689,45 @@ const (
 
 // PreemptionCandidateSelector defines the selection criteria for workloads that are candidates for preemption.
 type PreemptionCandidateSelector struct {
-
   // RelationRequirement specifies the queue or cohort relation boundary to the preemptor workload.
-  // Required.
-  RelationRequirement PreemptionRelationConstraint
+  //
+  // +kubebuilder:validation:Required
+  RelationRequirement PreemptionRelationConstraint `json:"relationRequirement"`
 
-  // Accepts all if not set.
+  // Quota specifies quota-based preemption constraints (e.g., borrowing capacity or fair sharing share).
   // Cannot be set if RelationRequirement is SameLocalQueue or SameClusterQueue.
-  Quota QuotaConstraint
+  // Accepts all if not set.
+  //
+  // +optional
+  Quota *QuotaConstraint `json:"quota,omitempty"`
 
-  // Accepts all if not set
   // NumericLabels defines rules for filtering candidates using custom numeric labels on the Workload resource.
   // Multiple numeric labels are joined using AND-rule (all have to be satisfied).
-  NumericLabels []NumericLabelConstraint
-
   // Accepts all if not set.
-  ClusterQueueSelector metav1.LabelSelector
+  //
+  // +optional
+  NumericLabels []NumericLabelConstraint `json:"numericLabels,omitempty"`
 
-  // Accepts all if not set
-  WorkloadSelector metav1.LabelSelector
+  // ClusterQueueSelector defines label selector constraints on candidate ClusterQueues.
+  // Accepts all if not set.
+  //
+  // +optional
+  ClusterQueueSelector *metav1.LabelSelector `json:"clusterQueueSelector,omitempty"`
 
-  // RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
+  // WorkloadSelector defines label selector constraints on candidate Workloads.
+  // Accepts all if not set.
+  //
+  // +optional
+  WorkloadSelector *metav1.LabelSelector `json:"workloadSelector,omitempty"`
+
+  // RelativeWorkloadPriority defines how the candidate's priority compares to the preemptor's priority.
   // For example "Lower" means that only workloads with lower
   // priority will be allowed as preemption candidates.
   // The comparison is made using effective priority (accounting for priority boost if enabled).
   // If nil, no relative priority check is enforced.
-  RelativeWorkloadPriority *RelativeConstraint
+  //
+  // +optional
+  RelativeWorkloadPriority *RelativeConstraint `json:"relativeWorkloadPriority,omitempty"`
 }
 
 
@@ -730,6 +746,9 @@ type PreemptionCandidateSelector struct {
 type NumericLabelConstraint struct {
   // Key is the label key that stores the integer value in the workload that will
   // be used for candidate selection.
+  //
+  // +kubebuilder:validation:Required
+  // +kubebuilder:validation:MaxLength=316
   Key string `json:"key"`
 
   // DefaultValue is used when a workload does not have the label key
@@ -740,7 +759,7 @@ type NumericLabelConstraint struct {
   // +optional
   DefaultValue *int32 `json:"defaultValue,omitempty"`
 
-  // Relation defines how the preemptor compares to the candidate.
+  // Relation defines how the candidate's label value compares to the preemptor's.
   // +optional
   Relation *RelativeConstraint `json:"relation,omitempty"`
 
@@ -1013,7 +1032,7 @@ Small parts of the implementation like in-memory trigger tracking or integration
 - Mutual exclusivity: `PreemptionConfig` and classical `preemption` become mutually exclusive; candidate merging is removed in favor of exclusive strategy execution.
 - API promotion: `PreemptionConfig` reference is promoted to a formal field in `ClusterQueueSpec`, and the Alpha annotation is deprecated and designated for removal.
 - No significant performance regression for existing preemptions translated to new preemption configs.
-- All of the **Open Challenges** are addressed.
+- All of the [Open Challenges](#open-challenges) regarding dynamic DRS state re-evaluation and backfilling fairness are addressed.
 - Public documentation explains configurable preemptions and documents the rules and triggers. Examples of recommended preemption configs are available for users. Common pitfalls are documented, and the documentation includes suitable warnings that this is an advanced topic and can lead to continuous preemptions if used inappropriately.
 
 #### Stable
@@ -1046,7 +1065,7 @@ Implementation of the foundations of PreemptionConfig:
 
 - candidate ordering reusing classical preemption ordering logic
 - triggers
-- iteration through candidates
+- candidate organization into per-selector, per-CQ priority queues using default preemption ordering
 - ClusterQueue integration via `kueue.x-k8s.io/alpha-preemption-config` annotation
 - preemption evaluator support for merging candidate outputs from classical preemption (`spec.preemption`) and `PreemptionConfig`
 
@@ -1064,9 +1083,11 @@ Create performance test suite for preemptions to validate current implementation
 
 **Step 3.** Reimplement existing classical and fair sharing rules using the new API to achieve full feature parity, enforce mutual exclusivity between strategies, introduce a formal API field on `ClusterQueueSpec` for Beta, and retire the Alpha annotation.
 
-**Step 4.** Implement the remaining selectors/constraints in preemption rules.
+**Step 4.** Implement additional candidate selectors (time-based execution and creation duration selectors, workload priority class selectors) and minimum trigger duration (`minTriggerRequiredDuration`).
 
-**Step 5.** Future design and implementation of `PreemptionLimit`.
+**Step 5.** Implement configurable candidate ordering (`ordering:` comparator chains and dynamic multi-queue candidate iteration).
+
+**Step 6.** Future design and implementation of preemption rate limiting (`PreemptionLimit`).
 
 <!--
 Major milestones in the lifecycle of a KEP should be tracked in this section.
@@ -1484,7 +1505,7 @@ type PreemptionCandidateSelector struct {
   // MaxExecutionDuration specifies the maximum runtime a candidate workload can have completed.
   MaxExecutionDuration *metav1.Duration `json:"maxExecutionDuration,omitempty"`
 
-  // ExecutionTimeRelation defines how the preemptor's execution time compares to the candidate's.
+  // ExecutionTimeRelation defines how the candidate's execution time compares to the preemptor's.
   ExecutionTimeRelation *RelativeConstraint `json:"executionTimeRelation,omitempty"`
 
   // Accepts any time from creation if not set.
@@ -1494,7 +1515,7 @@ type PreemptionCandidateSelector struct {
   // MaxTimeFromCreationDuration specifies the maximum age of the workload from creation timestamp.
   MaxTimeFromCreationDuration *metav1.Duration `json:"maxTimeFromCreationDuration,omitempty"`
 
-  // TimeFromCreationRelation defines how the preemptor's creation time compares to the candidate's.
+  // TimeFromCreationRelation defines how the candidate's creation time compares to the preemptor's.
   TimeFromCreationRelation *RelativeConstraint `json:"timeFromCreationRelation,omitempty"`
 }
 ```
@@ -1529,7 +1550,7 @@ spec:
 
 ### Workload Priority Class Selectors
 
-Selecting preemption candidates or qualifying preemptor workloads based on workload priority class label selectors allows targeting specific priority classes (e.g. preempting only `batch-low` workloads within the same ClusterQueue or when reclaiming borrowed cohort capacity). While these use cases are well-identified, configuring priority-class label selectors is deferred to future work.
+Selecting preemption candidates based on workload priority class label selectors allows targeting specific priority classes (e.g. preempting only `batch-low` workloads within the same ClusterQueue or when reclaiming borrowed cohort capacity). While these use cases are well-identified, configuring priority-class label selectors is deferred to future work. Preemptor workloads are qualified at the rule level via `matchingPreemptorWorkloads`.
 
 Relevant use cases include:
 
@@ -1540,17 +1561,17 @@ Relevant use cases include:
 
 #### Proposed API for Workload Priority Class Selectors
 
-In a future iteration, `PreemptionCandidateSelector` will be extended with the following label selector fields:
+In a future iteration, `PreemptionCandidateSelector` will be extended with the following label selector field:
 
 ```go
 type PreemptionCandidateSelector struct {
   // ... baseline candidate selector fields ...
 
+  // CandidateWorkloadPrioritySelector defines label selector constraints on candidate WorkloadPriorityClasses.
   // Matches all workload priority classes if not set.
-  PreemptingWorkloadPrioritySelector metav1.LabelSelector `json:"preemptingWorkloadPrioritySelector,omitempty"`
-
-  // Matches all workload priority classes if not set.
-  CandidateWorkloadPrioritySelector metav1.LabelSelector `json:"candidateWorkloadPrioritySelector,omitempty"`
+  //
+  // +optional
+  CandidateWorkloadPrioritySelector *metav1.LabelSelector `json:"candidateWorkloadPrioritySelector,omitempty"`
 }
 ```
 
@@ -1618,26 +1639,41 @@ const (
 )
 
 type PreemptionLimitSpec struct {
-  // Required
+  // Scope specifies the entity boundary for this preemption limit.
+  //
+  // +kubebuilder:validation:Required
   Scope PreemptionLimitScope `json:"scope"`
 
-  // If empty, it applies to all PreemptionConfigs
-  ConfigSelector metav1.LabelSelector `json:"configSelector,omitempty"`
+  // ConfigSelector selects PreemptionConfigs to which this limit applies.
+  // If not set, it applies to all PreemptionConfigs.
+  //
+  // +optional
+  ConfigSelector *metav1.LabelSelector `json:"configSelector,omitempty"`
 
-  // If empty, it applies to all CQs that may want to preempt.
-  ClusterQueueSelector metav1.LabelSelector `json:"clusterQueueSelector,omitempty"`
+  // ClusterQueueSelector selects ClusterQueues to which this limit applies.
+  // If not set, it applies to all ClusterQueues under the configured scope.
+  //
+  // +optional
+  ClusterQueueSelector *metav1.LabelSelector `json:"clusterQueueSelector,omitempty"`
 
-  // If empty, it applies to all rules.
+  // RuleNames restricts the limit to specific rule names within matching PreemptionConfigs.
+  // If not set, it applies to all rules.
+  //
+  // +optional
   RuleNames []string `json:"ruleNames,omitempty"`
 
   // Limit defines how many preemption events can occur within the given time window.
   // An event is defined as a confirmed (preemptor, preemptee) eviction pair.
   // Setting Limit to 0 blocks all preemptions under this limit's scope.
+  //
+  // +kubebuilder:validation:Required
   // +kubebuilder:validation:Minimum=0
-  Limit int `json:"limit"`
+  Limit int32 `json:"limit"`
 
   // LimitWindowDuration specifies the sliding time window duration.
   // Must be greater than or equal to 1s to prevent sub-second thrashing.
+  //
+  // +kubebuilder:validation:Required
   // +kubebuilder:validation:XValidation:rule="self >= duration('1s')",message="must be at least 1s"
   LimitWindowDuration metav1.Duration `json:"limitWindowDuration"`
 }
@@ -1650,7 +1686,7 @@ type PreemptionLimitStatus struct {
   // For CQ it is cluster queue name.
   // For Workload it is namespace + "/" + workload name.
   // Restricted to the top 1000 counts to fit within CRD size limits.
-  Count map[string]int `json:"count,omitempty"`
+  Count map[string]int32 `json:"count,omitempty"`
 }
 ```
 
@@ -1710,7 +1746,9 @@ type PreemptionRule struct {
   Name string `json:"name"`
 
   // MatchingPreemptorWorkloads specifies an optional label selector to limit which preemptor workloads can activate this rule.
-  MatchingPreemptorWorkloads metav1.LabelSelector `json:"matchingPreemptorWorkloads,omitempty"`
+  //
+  // +optional
+  MatchingPreemptorWorkloads *metav1.LabelSelector `json:"matchingPreemptorWorkloads,omitempty"`
 
   // Trigger specifies the condition (InsufficientQuota, QuotaReclaimRequired, or InsufficientTopology)
   // that must be observed on the preemptor workload for this rule to apply.
