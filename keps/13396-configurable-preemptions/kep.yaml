@@ -4,6 +4,7 @@ authors:
   - "@dkaluza"
   - "@mwielgus"
   - "@danylott"
+  - "@nilsachy"
 status: provisional
 creation-date: 2026-07-23
 reviewers:
@@ -11,7 +12,6 @@ reviewers:
   - "@tenzen-y"
   - "@kshalot"
   - "@olekzabl"
-  - "@nilsachy"
 approvers:
   - "@mimowo"
   - "@tenzen-y"
