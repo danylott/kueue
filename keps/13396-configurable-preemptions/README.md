@@ -25,8 +25,6 @@
 - [Design Details](#design-details)
   - [Proposed API PreemptionConfig](#proposed-api-preemptionconfig)
     - [Default Candidate Ordering](#default-candidate-ordering)
-  - [Proposed API for PreemptionLimit](#proposed-api-for-preemptionlimit)
-    - [Observability When Reaching Preemption Limits](#observability-when-reaching-preemption-limits)
   - [Preemption evaluation flow in scheduler](#preemption-evaluation-flow-in-scheduler)
     - [Step-by-Step Breakdown](#step-by-step-breakdown)
   - [Efficient iteration through candidates in preemption order](#efficient-iteration-through-candidates-in-preemption-order)
@@ -66,6 +64,12 @@
     - [Examples with Workload Priority Class Selectors](#examples-with-workload-priority-class-selectors)
       - [Story 1 - Priority Threshold for Within-ClusterQueue Preemptions](#story-1---priority-threshold-for-within-clusterqueue-preemptions)
       - [Story 2 - Priority Threshold for Reclaim Within Cohort](#story-2---priority-threshold-for-reclaim-within-cohort)
+  - [PreemptionLimit (Rate-Limiting Guardrails)](#preemptionlimit-rate-limiting-guardrails)
+    - [Proposed API for PreemptionLimit](#proposed-api-for-preemptionlimit)
+    - [Observability When Reaching Preemption Limits](#observability-when-reaching-preemption-limits)
+    - [Examples with PreemptionLimit](#examples-with-preemptionlimit)
+      - [Story 1 - Global Preemption Rate Limiting](#story-1---global-preemption-rate-limiting)
+      - [Story 2 - Protecting a Mission-Critical ClusterQueue from Preemption](#story-2---protecting-a-mission-critical-clusterqueue-from-preemption)
 <!-- /toc -->
 
 ## Summary
@@ -89,9 +93,9 @@ updates.
 [documentation style guide]: https://github.com/kubernetes/community/blob/master/contributors/guide/style-guide.md
 -->
 
-This KEP introduces **Configurable Preemptions** in Kueue through two cluster-scoped CRDs: `PreemptionConfig` and `PreemptionLimit`.
+This KEP introduces **Configurable Preemptions** in Kueue through the `PreemptionConfig` cluster-scoped CRD (with rate-limiting guardrails via `PreemptionLimit` deferred to future work).
 This enables declarative preemption policies for scenarios unsupported by existing heuristics, including topology defragmentation, mission-critical "hero" workloads, and business SLA constraints.
-With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints) and candidate selectors (such as priority relations, queue relations, and custom numeric labels, with time-based duration selectors and custom ordering deferred to future work). In the initial iteration, candidate evaluation reuses the default ordering rules from classical preemption and fair sharing. In Alpha, `PreemptionConfig` is referenced via an explicit Alpha annotation on the `ClusterQueue` (`kueue.x-k8s.io/alpha-preemption-config`), keeping the defaulting of `spec.preemption` intact and merging the candidate outputs of both classical and configurable preemption strategies. For Beta+, as `PreemptionConfig` achieves full feature parity with classical preemption, both strategies will become mutually exclusive via a formal API field, and the Alpha annotation will be retired. `PreemptionLimit` provides rate-limiting guardrails across global, queue, and workload scopes to prevent cascading preemptions and maintain cluster stability.
+With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints) and candidate selectors (such as priority relations, queue relations, and custom numeric labels, with time-based duration selectors, priority class selectors, custom ordering, and `PreemptionLimit` deferred to future work). In the initial iteration, candidate evaluation reuses the default ordering rules from classical preemption and fair sharing. In Alpha, `PreemptionConfig` is referenced via an explicit Alpha annotation on the `ClusterQueue` (`kueue.x-k8s.io/alpha-preemption-config`), keeping the defaulting of `spec.preemption` intact and merging the candidate outputs of both classical and configurable preemption strategies. For Beta+, as `PreemptionConfig` achieves full feature parity with classical preemption, both strategies will become mutually exclusive via a formal API field, and the Alpha annotation will be retired.
 
 ## Motivation
 
@@ -321,27 +325,19 @@ spec:
   # ... other ClusterQueue fields ...
 ```
 
-In parallel, introduce the **PreemptionLimit** cluster-scoped CRD. This CRD will allow cluster administrators to define the overall number of preemptions for a specific "scope" in a particular time window. This will give administrators fine-grained settings to control the number of preemptions that can occur in the cluster, thereby giving them more control over cluster stability.
-Workloads will only be preempted if doing so respects all defined limits. The following scopes will be supported:
-
-- Global — total number of preemptions that can occur in the cluster.
-- PreemptingClusterQueue — total number of preemptions triggered by workloads from a particular cluster queue.
-- PreemptedClusterQueue — total number of preemptions of workloads that belong to a specific cluster queue.
-- PreemptedWorkload — total number of times a particular workload can be preempted.
-
-Details about the API can be seen in the [Design Details](#design-details) section.
+Rate-limiting guardrails via a separate **PreemptionLimit** cluster-scoped CRD across global, queue, and workload scopes are deferred to [Future Work Ideas](#future-work-ideas) to focus the initial iteration on `PreemptionConfig`.
 
 Success criteria:
 
 1. Cluster administrators are able to configure preemptions in the cluster in a way that satisfies their organization's needs.
-2. Workloads are preempted only if allowed by the appropriate preemption config and/or classical `preemption` field (whose candidate outputs are merged in Alpha) and preemption limits.
+2. Workloads are preempted only if allowed by the appropriate preemption config and/or classical `preemption` field (whose candidate outputs are merged in Alpha).
 3. Most popular setups are possible, tested, and covered by documentation:
    - Defragmentation
    - Hero jobs
 
 ### User Stories
 
-Each of the user stories mentioned in the motivation section can be fulfilled by an appropriate config and/or preemption limits. Configs and limits for each of them can be found below in the appropriate subsections.
+Each of the user stories mentioned in the motivation section can be fulfilled by an appropriate config. Configs for each of them can be found below in the appropriate subsections.
 
 #### Story 1 - Defragmentation
 
@@ -401,17 +397,8 @@ spec:
 And then to make sure that the hero job is never preempted, one may:
 
 1. Make the hero job's priority higher than any other workload's priority and do not allow preemption of workloads with higher or equal priority.
-2. Have preemption limits with 0 allowed preemptions from the hero job's CQ (doable after milestone 5):
-   ```yaml
-   spec:
-     scope: "PreemptedClusterQueue"
-     clusterQueueSelector:
-       matchLabels:
-         kueue.x-k8s.io/queue-name: "hero-cq"
-     limit: 0
-     limitWindowDuration: "1h"
-   ```
-3. Define in candidate selectors subfield `ClusterQueueSelector` of other preemption configs that they cannot preempt from the hero job's CQ.
+2. Define in candidate selectors subfield `ClusterQueueSelector` of other preemption configs that they cannot preempt from the hero job's CQ.
+3. In future milestones, use a `PreemptionLimit` with 0 allowed preemptions from the hero job's CQ (see [Future Work Ideas](#future-work-ideas)).
 
 Thanks to the elevated preemption privileges, the hero job will be able to preempt any workload and borrow quota from other CQs in the cohort tree (this job will still be affected by lending limits — so they have to be set appropriately to allow for gathering quota). It will also effectively lock this quota, as no other workload will be able to preempt it.
 
@@ -518,7 +505,7 @@ There are many possible extensions of the proposed selectors in the rules. For n
 - **Backward Compatibility & Strategy Merging (Alpha):** `ClusterQueue.spec.preemption` remains fully backward-compatible, retaining its declarative kubebuilder defaulting (`+kubebuilder:default={}`). No new field is added to `ClusterQueueSpec` in Alpha; instead, `PreemptionConfig` is referenced via the `kueue.x-k8s.io/alpha-preemption-config` annotation. The scheduler merges candidate outputs from both classical preemption and `PreemptionConfig`. For Beta+, the two strategies will become mutually exclusive via a formal API field once `PreemptionConfig` provides full feature parity with classical preemption.
 - **Deterministic Scheduling:** Candidate selection, victim evaluation, and tie-breaking must remain strictly deterministic across scheduling cycles (guaranteed by multi-key comparison chains and Workload UID tie-breaking).
 - **Non-mutating Evaluation:** Preemption evaluation operates strictly on cluster snapshot state and simulated usage without mutating workload specs or priorities during preemption simulation.
-- **Resource Scope:** `PreemptionConfig` and `PreemptionLimit` are cluster-scoped CRDs subject to standard Kubernetes RBAC and controller-runtime caching mechanisms.
+- **Resource Scope:** `PreemptionConfig` is a cluster-scoped CRD subject to standard Kubernetes RBAC and controller-runtime caching mechanisms (`PreemptionLimit` is deferred to future work).
 
 ### Caveats
 
@@ -534,7 +521,7 @@ Given the extensive nature of **PreemptionConfigs** defined below, the API intro
 
 One inherent risk is users deploying ill-defined preemption configs that could lead to cluster instability (e.g. cascading preemptions). The design includes the following mitigations:
 
-1. **Global limits** — cluster administrators have an additional safety measure that can be used to roll out new configs or rules gradually, by limiting the number of preemptions permitted by a particular config or rule.
+1. **Rate-limiting guardrails** — cluster administrators can define preemption limits to roll out new configs or rules gradually (deferred to future work as `PreemptionLimit`).
 2. **Restrictive default preemption config** — By default, an empty config does not lead to any preemptions as candidate selection rules will be empty.
 3. **Documentation** — Comprehensive documentation will be provided to help users understand the risks and benefits of each configuration option, including examples of common preemption scenarios and how to configure them.
 
@@ -808,78 +795,6 @@ In the initial iteration, candidate workloads are evaluated and ordered using th
 
 Configurable candidate ordering via an `Ordering` field is deferred to [Future Work Ideas](#future-work-ideas).
 
-### Proposed API for PreemptionLimit
-
-```go
-type PreemptionLimit struct {
-  metav1.TypeMeta
-  metav1.ObjectMeta
-  Spec PreemptionLimitSpec
-  Status PreemptionLimitStatus
-}
-
-// +kubebuilder:validation:Enum=Global;PreemptingClusterQueue;PreemptedClusterQueue;PreemptedWorkload
-type PreemptionLimitScope string
-const (
-  GlobalPreemptionLimitScope PreemptionLimitScope = "Global"
-  PreemptingCQLimitScope PreemptionLimitScope = "PreemptingClusterQueue"
-  PreemptedCQLimitScope PreemptionLimitScope = "PreemptedClusterQueue"
-  PreemptedWorkloadLimitScope PreemptionLimitScope = "PreemptedWorkload"
-)
-
-type PreemptionLimitSpec struct {
-  // Required
-  Scope PreemptionLimitScope
-
-  // If empty, it applies to all PreemptionConfigs
-  ConfigSelector metav1.LabelSelector
-
-  // If empty, it applies to all CQs that may want to preempt.
-  ClusterQueueSelector metav1.LabelSelector
-
-  // If empty, it applies to all rules.
-  RuleNames []string
-
-  // Limit defines how many preemption events can occur within the given time window.
-  // An event is defined as a confirmed (preemptor, preemptee) eviction pair.
-  // Setting Limit to 0 blocks all preemptions under this limit's scope.
-  // +kubebuilder:validation:Minimum=0
-  Limit int
-
-  // LimitWindowDuration specifies the sliding time window duration.
-  // Must be greater than or equal to 1s to prevent sub-second thrashing.
-  // +kubebuilder:validation:XValidation:rule="self >= duration('1s')",message="must be at least 1s"
-  LimitWindowDuration metav1.Duration
-}
-
-type PreemptionLimitStatus struct {
-  Conditions []metav1.Condition
-
-  // Periodically updated, for reference only.
-  // Map key depends on the scope. For Global it is just Global.
-  // For CQ it is cluster queue name.
-  // For Workload it is namespace + "/" + workload name.
-  // Restricted to the top 1000 counts to fit within CRD size limits.
-  Count map[string]int
-}
-```
-
-PreemptionLimit limits the number of preemptions that happen for the specified set of rules. The preemption evaluator evaluates proposed preemptions against defined limit objects, allowing them to proceed only if adequate preemption quota remains. If a preemption is in the scope of multiple limits, quota must exist in all of them.
-To track this, a list of preemption rule names responsible for selecting each candidate must be maintained.
-
-To manage this data, Kueue stores a comprehensive preemption map in memory, which is isolated per PreemptionLimit. This map tracks all preemption event timestamps under a specific CQ/workload key, capturing events that occurred within the designated `LimitWindowDuration`. Moreover, it tracks only events that are in the scope of the specific limit; if a preemption does not match the defined config or rules selector, it will not be tracked in that particular instance of the preemption map.
-This list is dynamically trimmed upon each retrieval to filter out expired timestamps.
-
-Furthermore, the status of the PreemptionLimit is refreshed periodically — approximately every minute — to write the aggregated totals into the count map (restricted to the top 1000 counts to fit within CRD size limits).
-
-#### Observability When Reaching Preemption Limits
-
-When preemption is throttled or blocked due to an exhausted `PreemptionLimit`:
-
-1. **Workload Condition**: A condition with type `PreemptionBlockedByLimit` (reason `PreemptionLimitExceeded`) is assigned to the preemptor Workload, with an informative message indicating which limit blocked admission (e.g. `"Preemption was blocked by PreemptionLimit <limit-name>"`).
-2. **Kubernetes Events**: A Kubernetes `Event` with reason `PreemptionThrottled` is emitted on both the preemptor Workload and its ClusterQueue.
-3. **Structured Audit Logging**: Informational/debug log entries are recorded specifying the limit name, scope, and affected entities for operator troubleshooting.
-
 ### Preemption evaluation flow in scheduler
 
 The preemption evaluation flow integrates trigger condition tracking, upper-bound feasibility checks, ordered candidate evaluation (until quota and topology conditions are satisfied), and reverse-order victim backfilling across scheduling cycles:
@@ -898,7 +813,7 @@ flowchart TD
 
     subgraph CycleN ["2. Subsequent Cycles: Preemption Evaluation in getInitialAssignments"]
         H -.->|Next Scheduling Cycle / Timer Expiry| I["Consider Workload in Subsequent Cycle<br/>(nominate -> getInitialAssignments)"]
-        I --> J["Evaluate In-Memory Trigger Durations & Limits<br/>(PreemptionEvaluator)"]
+        I --> J["Evaluate In-Memory Trigger Durations<br/>(PreemptionEvaluator)"]
         J --> K{"Is Any Trigger Duration Satisfied?<br/>(now - inMemoryObserved >= minDuration)"}
         K -->|No| L["Preemption Not Eligible Yet<br/>(Wait in inadmissible until timer expires)"]
         K -->|Yes| M["Upper-Bound Feasibility Check<br/>(CandidatesQuotaAndTopologyUpperLimit)"]
@@ -969,7 +884,7 @@ flowchart TD
      - If `MinTriggerRequiredDuration > 0s`, the workload is moved to `inadmissibleWorkloads`, and an in-memory timer is scheduled to move it back to the active queue once the required duration expires.
 
 2. **Trigger Duration & Preemption Evaluation (`PreemptionEvaluator`)**:
-   - In subsequent scheduling cycles (either immediately on the next tick for `0s` duration or upon timer expiration for `>0s` duration), `getInitialAssignments()` queries `PreemptionEvaluator` to check whether the elapsed time since the in-memory observation timestamp satisfies `MinTriggerRequiredDuration` for any applicable preemption rule and evaluates preemption limits.
+   - In subsequent scheduling cycles (either immediately on the next tick for `0s` duration or upon timer expiration for `>0s` duration), `getInitialAssignments()` queries `PreemptionEvaluator` to check whether the elapsed time since the in-memory observation timestamp satisfies `MinTriggerRequiredDuration` for any applicable preemption rule.
    - If no trigger duration is satisfied, preemption is bypassed for this cycle, allowing the workload to continue waiting in `inadmissibleWorkloads`.
    - If triggers are satisfied but no preemption candidates exist in the cluster (e.g. all running workloads have higher priority), the workload is moved to `inadmissibleWorkloads` to prevent infinite busy-looping.
 
@@ -980,7 +895,7 @@ flowchart TD
 4. **Candidate Gathering & Strategy Merging (Alpha)**:
    - In Alpha, candidates are gathered by evaluating both preemption mechanisms:
      - **Classical Preemption**: Evaluates candidates according to `cq.Spec.Preemption` policies (e.g. workloads borrowing from the preemptor's ClusterQueue, or lower-priority workloads in the same CQ or cohort).
-     - **Configurable Preemption**: Evaluates candidates matching the rules and candidate selectors of the `PreemptionConfig` referenced by the `kueue.x-k8s.io/alpha-preemption-config` annotation (subject to trigger durations and active `PreemptionLimit` quotas).
+     - **Configurable Preemption**: Evaluates candidates matching the rules and candidate selectors of the `PreemptionConfig` referenced by the `kueue.x-k8s.io/alpha-preemption-config` annotation (subject to trigger durations).
    - The candidate outputs of both strategies are **merged and deduplicated** into a single candidate set ($C_{\text{merged}} = C_{\text{classical}} \cup C_{\text{config}}$).
    - This provides maximum flexibility: users can run both strategies concurrently, or fully stop candidates from either mechanism (e.g., setting `reclaimWithinCohort: Never` and `withinClusterQueue: Never` disables classical candidates, while omitting the annotation disables configurable preemption candidates).
 
@@ -999,12 +914,7 @@ flowchart TD
    - Preemption is asynchronous: the preemptor cannot be admitted immediately while victim pods are terminating.
    - Once all evicted victim workloads complete termination and release their quota and topology allocations, the preemptor is evaluated in a subsequent scheduling cycle. In this cycle, the preemptor fits directly within available capacity and proceeds to admission (`admit()`).
 
-Preemption limits are evaluated in two complementary phases within `PreemptionEvaluator`:
-
-- **Static Rule Qualification (Step 2)**: Before evaluating individual candidates, the evaluator checks whether remaining preemption quota exists for applicable rules under defined `PreemptionLimit` objects. If any mandatory limit is completely exhausted, the rule is bypassed.
-- **Dynamic Limit Decrement (Step 5)**: During forward candidate iteration, as candidate workloads are simulated for preemption, local copies of scoped preemption limits (especially `PreemptedClusterQueue` and `PreemptedWorkload` limits) are decremented alongside simulated quota and DRS changes. If a candidate's eviction would exceed an active preemption limit, that candidate is skipped.
-
-`CandidatesQuotaAndTopologyUpperLimit` by design is just an approximation to allow for short-circuiting when the preemptor obviously will not be admitted anyway. It will just use the initial state of the `PreemptionEvaluator` and does not attempt to simulate changes in DRS, borrowing, or preemption limits during iteration over candidates. However, the returned values should always be greater than or equal to what can be preempted at this moment, so it is reasonable to avoid heavy simulation if the result is smaller than the requested amount.
+`CandidatesQuotaAndTopologyUpperLimit` by design is just an approximation to allow for short-circuiting when the preemptor obviously will not be admitted anyway. It will just use the initial state of the `PreemptionEvaluator` and does not attempt to simulate changes in DRS or borrowing during iteration over candidates. However, the returned values should always be greater than or equal to what can be preempted at this moment, so it is reasonable to avoid heavy simulation if the result is smaller than the requested amount.
 
 ### Efficient iteration through candidates in preemption order
 
@@ -1184,7 +1094,7 @@ when drafting this test plan.
 existing tests to make this code solid enough prior to committing the changes necessary
 to implement this enhancement.
 
-For now, the test plan is focused on PreemptionConfig. PreemptionLimits-related tests will be added later.
+The test plan is focused on `PreemptionConfig` (`PreemptionLimit` is deferred to future work).
 
 #### Unit tests
 
@@ -1284,11 +1194,9 @@ Create performance test suite for preemptions to validate current implementation
 
 **Step 3.** Reimplement existing classical and fair sharing rules using the new API to achieve full feature parity, enforce mutual exclusivity between strategies, introduce a formal API field on `ClusterQueueSpec` for Beta, and retire the Alpha annotation.
 
-**Step 4.** Design update with PreemptionLimits test scenarios and details.
+**Step 4.** Implement the remaining selectors/constraints in preemption rules.
 
-**Step 5.** Implement PreemptionLimits.
-
-**Step 6.** Implement the remaining selectors/constraints in preemption rules.
+**Step 5.** Future design and implementation of `PreemptionLimit`.
 
 <!--
 Major milestones in the lifecycle of a KEP should be tracked in this section.
@@ -1664,4 +1572,115 @@ spec:
           candidateWorkloadPrioritySelector:
             matchLabels:
               kueue.x-k8s.io/priority-class: "batch-low"
+```
+
+### PreemptionLimit (Rate-Limiting Guardrails)
+
+While `PreemptionConfig` provides declarative candidate selection policies, cluster administrators also need rate-limiting guardrails to prevent cascading preemptions, eviction storms, and cluster instability during large-scale rescheduling. To maintain focus on core `PreemptionConfig` mechanics for Alpha, the `PreemptionLimit` cluster-scoped CRD is deferred to future work.
+
+Relevant capabilities include:
+
+1. **Global rate-limiting**: Restrict the total number of preemption events across the entire cluster within a sliding time window.
+2. **Preempting ClusterQueue rate-limiting**: Throttle preemptions triggered by workloads originating from a specific ClusterQueue.
+3. **Preempted ClusterQueue protection**: Limit or block preemptions targeting workloads belonging to a specific ClusterQueue (e.g., setting `limit: 0` to make mission-critical or hero queues non-preemptible).
+4. **Preempted Workload churn limiting**: Restrict how many times an individual workload can be preempted within a given time window to avoid starvation or ping-pong eviction loops.
+
+#### Proposed API for PreemptionLimit
+
+In a future iteration, `PreemptionLimit` will be introduced as a cluster-scoped CRD:
+
+```go
+type PreemptionLimit struct {
+  metav1.TypeMeta `json:",inline"`
+  metav1.ObjectMeta `json:"metadata,omitempty"`
+  Spec PreemptionLimitSpec `json:"spec,omitempty"`
+  Status PreemptionLimitStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:validation:Enum=Global;PreemptingClusterQueue;PreemptedClusterQueue;PreemptedWorkload
+type PreemptionLimitScope string
+const (
+  GlobalPreemptionLimitScope PreemptionLimitScope = "Global"
+  PreemptingCQLimitScope PreemptionLimitScope = "PreemptingClusterQueue"
+  PreemptedCQLimitScope PreemptionLimitScope = "PreemptedClusterQueue"
+  PreemptedWorkloadLimitScope PreemptionLimitScope = "PreemptedWorkload"
+)
+
+type PreemptionLimitSpec struct {
+  // Required
+  Scope PreemptionLimitScope `json:"scope"`
+
+  // If empty, it applies to all PreemptionConfigs
+  ConfigSelector metav1.LabelSelector `json:"configSelector,omitempty"`
+
+  // If empty, it applies to all CQs that may want to preempt.
+  ClusterQueueSelector metav1.LabelSelector `json:"clusterQueueSelector,omitempty"`
+
+  // If empty, it applies to all rules.
+  RuleNames []string `json:"ruleNames,omitempty"`
+
+  // Limit defines how many preemption events can occur within the given time window.
+  // An event is defined as a confirmed (preemptor, preemptee) eviction pair.
+  // Setting Limit to 0 blocks all preemptions under this limit's scope.
+  // +kubebuilder:validation:Minimum=0
+  Limit int `json:"limit"`
+
+  // LimitWindowDuration specifies the sliding time window duration.
+  // Must be greater than or equal to 1s to prevent sub-second thrashing.
+  // +kubebuilder:validation:XValidation:rule="self >= duration('1s')",message="must be at least 1s"
+  LimitWindowDuration metav1.Duration `json:"limitWindowDuration"`
+}
+
+type PreemptionLimitStatus struct {
+  Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+  // Periodically updated, for reference only.
+  // Map key depends on the scope. For Global it is just Global.
+  // For CQ it is cluster queue name.
+  // For Workload it is namespace + "/" + workload name.
+  // Restricted to the top 1000 counts to fit within CRD size limits.
+  Count map[string]int `json:"count,omitempty"`
+}
+```
+
+PreemptionLimit limits the number of preemptions that happen for the specified set of rules. The preemption evaluator evaluates proposed preemptions against defined limit objects, allowing them to proceed only if adequate preemption quota remains. If a preemption is in the scope of multiple limits, quota must exist in all of them.
+To track this, a list of preemption rule names responsible for selecting each candidate must be maintained.
+
+To manage this data, Kueue will store a comprehensive preemption map in memory, isolated per PreemptionLimit. This map tracks all preemption event timestamps under a specific CQ/workload key, capturing events that occurred within the designated `LimitWindowDuration`. Moreover, it tracks only events that are in the scope of the specific limit; if a preemption does not match the defined config or rules selector, it will not be tracked in that particular instance of the preemption map. This list is dynamically trimmed upon each retrieval to filter out expired timestamps.
+
+Furthermore, the status of the PreemptionLimit is refreshed periodically — approximately every minute — to write the aggregated totals into the count map (restricted to the top 1000 counts to fit within CRD size limits).
+
+#### Observability When Reaching Preemption Limits
+
+When preemption is throttled or blocked due to an exhausted `PreemptionLimit`:
+
+1. **Workload Condition**: A condition with type `PreemptionBlockedByLimit` (reason `PreemptionLimitExceeded`) is assigned to the preemptor Workload, with an informative message indicating which limit blocked admission (e.g. `"Preemption was blocked by PreemptionLimit <limit-name>"`).
+2. **Kubernetes Events**: A Kubernetes `Event` with reason `PreemptionThrottled` is emitted on both the preemptor Workload and its ClusterQueue.
+3. **Structured Audit Logging**: Informational/debug log entries are recorded specifying the limit name, scope, and affected entities for operator troubleshooting.
+
+#### Examples with PreemptionLimit
+
+##### Story 1 - Global Preemption Rate Limiting
+
+Rate-limit global preemptions to at most 10 evictions across the entire cluster in any 5-minute sliding window:
+
+```yaml
+spec:
+  scope: "Global"
+  limit: 10
+  limitWindowDuration: "5m"
+```
+
+##### Story 2 - Protecting a Mission-Critical ClusterQueue from Preemption
+
+Ensure that workloads running in the `hero-cq` ClusterQueue can never be preempted by setting `limit: 0` under the `PreemptedClusterQueue` scope:
+
+```yaml
+spec:
+  scope: "PreemptedClusterQueue"
+  clusterQueueSelector:
+    matchLabels:
+      kueue.x-k8s.io/queue-name: "hero-cq"
+  limit: 0
+  limitWindowDuration: "1h"
 ```
