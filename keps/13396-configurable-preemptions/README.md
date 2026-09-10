@@ -70,6 +70,10 @@
     - [Examples with PreemptionLimit](#examples-with-preemptionlimit)
       - [Story 1 - Global Preemption Rate Limiting](#story-1---global-preemption-rate-limiting)
       - [Story 2 - Protecting a Mission-Critical ClusterQueue from Preemption](#story-2---protecting-a-mission-critical-clusterqueue-from-preemption)
+  - [Minimum Trigger Duration (MinTriggerRequiredDuration)](#minimum-trigger-duration-mintriggerrequiredduration)
+    - [Proposed API for Minimum Trigger Duration](#proposed-api-for-minimum-trigger-duration)
+    - [Examples with Minimum Trigger Duration](#examples-with-minimum-trigger-duration)
+      - [Story 1 - Grace Period for Topology Defragmentation](#story-1---grace-period-for-topology-defragmentation)
 <!-- /toc -->
 
 ## Summary
@@ -95,7 +99,7 @@ updates.
 
 This KEP introduces **Configurable Preemptions** in Kueue through the `PreemptionConfig` cluster-scoped CRD (with rate-limiting guardrails via `PreemptionLimit` deferred to future work).
 This enables declarative preemption policies for scenarios unsupported by existing heuristics, including topology defragmentation, mission-critical "hero" workloads, and business SLA constraints.
-With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints) and candidate selectors (such as priority relations, queue relations, and custom numeric labels, with time-based duration selectors, priority class selectors, custom ordering, and `PreemptionLimit` deferred to future work). In the initial iteration, candidate evaluation reuses the default ordering rules from classical preemption and fair sharing. In Alpha, `PreemptionConfig` is referenced via an explicit Alpha annotation on the `ClusterQueue` (`kueue.x-k8s.io/alpha-preemption-config`), keeping the defaulting of `spec.preemption` intact and merging the candidate outputs of both classical and configurable preemption strategies. For Beta+, as `PreemptionConfig` achieves full feature parity with classical preemption, both strategies will become mutually exclusive via a formal API field, and the Alpha annotation will be retired.
+With `PreemptionConfig`, administrators can configure explicit triggers (quota or topology constraints) and candidate selectors (such as priority relations, queue relations, and custom numeric labels, with minimal trigger duration, time-based candidate duration selectors, priority class selectors, custom ordering, and `PreemptionLimit` deferred to future work). In the initial iteration, candidate evaluation reuses the default ordering rules from classical preemption and fair sharing. In Alpha, `PreemptionConfig` is referenced via an explicit Alpha annotation on the `ClusterQueue` (`kueue.x-k8s.io/alpha-preemption-config`), keeping the defaulting of `spec.preemption` intact and merging the candidate outputs of both classical and configurable preemption strategies. For Beta+, as `PreemptionConfig` achieves full feature parity with classical preemption, both strategies will become mutually exclusive via a formal API field, and the Alpha annotation will be retired.
 
 ## Motivation
 
@@ -354,7 +358,6 @@ spec:
   rules:
     - name: defrag-smaller-tpu-workloads
       trigger: "InsufficientTopology"
-      minTriggerRequiredDuration: "30s"
       candidateSelectors:
         - relativeWorkloadPriority: "LowerOrEqual"
           relationRequirement: "AnyClusterQueue"
@@ -612,14 +615,6 @@ type PreemptionRule struct {
   // +kubebuilder:validation:Required
   Trigger PreemptionRuleTrigger `json:"trigger"`
 
-  // MinTriggerRequiredDuration specifies how long the trigger condition must be observed before
-  // preempting workloads specified by candidateSelectors. 0s indicates that preemptions can be started immediately.
-  // Defaults to 0s.
-  //
-  // +optional
-  // +kubebuilder:default="0s"
-  MinTriggerRequiredDuration metav1.Duration `json:"minTriggerRequiredDuration,omitempty"`
-
   // CandidateSelectors specifies the selection rules for workloads that are candidates for preemption.
   // Candidates resulting from multiple selectors are summed into one set.
   // No selectors result in an empty candidate set, thereby disallowing any preemptions with this rule.
@@ -636,7 +631,7 @@ The supported in-memory trigger types are:
 - `QuotaReclaimRequired`: The workload cannot be scheduled because nominal quota was borrowed by cohort members; reclaiming this quota from borrowers is required.
 - `InsufficientTopology`: Quota is available, but no topology domain satisfies the workload's topology requirements (TAS).
 
-By maintaining triggers in-memory, the scheduler avoids etcd write amplification, eliminates informer watch propagation latency between scheduling cycles, and prevents duplicate API patch conflicts while still enabling precise duration-based rules (`MinTriggerRequiredDuration`).
+By maintaining triggers in-memory, the scheduler avoids etcd write amplification, eliminates informer watch propagation latency between scheduling cycles, and prevents duplicate API patch conflicts, while providing the foundation to support deferred duration-based rules (`MinTriggerRequiredDuration`) in future iterations.
 
 ```go
 
@@ -808,14 +803,14 @@ flowchart TD
         D --> E{"Workload Fits Directly?"}
         E -->|Yes| F["Admit Workload<br/>(admit)"]
         E -->|No| G["Record Trigger State & Observation Timestamp<br/>in Queue Memory Cache<br/>(InsufficientQuota / QuotaReclaimRequired / InsufficientTopology)"]
-        G --> H["Requeue Workload<br/>(Immediate for 0s duration / Timer for >0s duration)"]
+        G --> H["Requeue Workload<br/>(Immediate requeue to active heap)"]
     end
 
     subgraph CycleN ["2. Subsequent Cycles: Preemption Evaluation in getInitialAssignments"]
-        H -.->|Next Scheduling Cycle / Timer Expiry| I["Consider Workload in Subsequent Cycle<br/>(nominate -> getInitialAssignments)"]
-        I --> J["Evaluate In-Memory Trigger Durations<br/>(PreemptionEvaluator)"]
-        J --> K{"Is Any Trigger Duration Satisfied?<br/>(now - inMemoryObserved >= minDuration)"}
-        K -->|No| L["Preemption Not Eligible Yet<br/>(Wait in inadmissible until timer expires)"]
+        H -.->|Next Scheduling Cycle| I["Consider Workload in Subsequent Cycle<br/>(nominate -> getInitialAssignments)"]
+        I --> J["Evaluate In-Memory Triggers<br/>(PreemptionEvaluator)"]
+        J --> K{"Is Any Trigger Satisfied?<br/>(Matching trigger observed in memory)"}
+        K -->|No| L["Preemption Bypassed<br/>(No matching trigger)"]
         K -->|Yes| M["Upper-Bound Feasibility Check<br/>(CandidatesQuotaAndTopologyUpperLimit)"]
         M --> N{"Preemptor Fits if ALL<br/>Candidates Preempted?"}
         N -->|No| O["Preemption Infeasible<br/>(Preemptor cannot fit even with all candidates)"]
@@ -879,23 +874,22 @@ flowchart TD
    - In `nominate()`, initial resource flavor requirements are calculated for all active queue heads.
    - In `processEntry()`, each entry is processed:
      - If the workload fits directly, it proceeds to admission (`admit()`).
-     - If the workload cannot fit directly (e.g. requires preemption or lacks resources/topology), `processEntry()` detects the active triggers (`InsufficientQuota`, `QuotaReclaimRequired`, or `InsufficientTopology`) and records their initial observation timestamp in memory within the queue manager / scheduler cache.
-     - If `MinTriggerRequiredDuration == 0s`, the workload is requeued immediately to the active heap (`immediate = true`), allowing it to be evaluated for preemption on the very next scheduling pass without waiting for API patches or watch delivery.
-     - If `MinTriggerRequiredDuration > 0s`, the workload is moved to `inadmissibleWorkloads`, and an in-memory timer is scheduled to move it back to the active queue once the required duration expires.
+     - If the workload cannot fit directly (e.g. requires preemption or lacks resources/topology), `processEntry()` detects the active triggers (`InsufficientQuota`, `QuotaReclaimRequired`, or `InsufficientTopology`) and records their initial observation in memory within the queue manager / scheduler cache.
+     - The workload is requeued immediately to the active heap (`immediate = true`), allowing it to be evaluated for preemption on the very next scheduling pass without waiting for API patches or watch delivery.
 
-2. **Trigger Duration & Preemption Evaluation (`PreemptionEvaluator`)**:
-   - In subsequent scheduling cycles (either immediately on the next tick for `0s` duration or upon timer expiration for `>0s` duration), `getInitialAssignments()` queries `PreemptionEvaluator` to check whether the elapsed time since the in-memory observation timestamp satisfies `MinTriggerRequiredDuration` for any applicable preemption rule.
-   - If no trigger duration is satisfied, preemption is bypassed for this cycle, allowing the workload to continue waiting in `inadmissibleWorkloads`.
+2. **Trigger & Preemption Evaluation (`PreemptionEvaluator`)**:
+   - In subsequent scheduling cycles (immediately on the next tick), `getInitialAssignments()` queries `PreemptionEvaluator` to check whether the active trigger condition matches any applicable preemption rule.
+   - If no trigger is satisfied, preemption is bypassed for this cycle, allowing the workload to continue waiting or be requeued.
    - If triggers are satisfied but no preemption candidates exist in the cluster (e.g. all running workloads have higher priority), the workload is moved to `inadmissibleWorkloads` to prevent infinite busy-looping.
 
 3. **Upper-Bound Feasibility Check (`CandidatesQuotaAndTopologyUpperLimit`)**:
-   - If a trigger duration is met, the scheduler performs an upper-bound check using `CandidatesQuotaAndTopologyUpperLimit` by simulating the removal of all matching candidate workloads.
+   - If an applicable trigger is met, the scheduler performs an upper-bound check using `CandidatesQuotaAndTopologyUpperLimit` by simulating the removal of all matching candidate workloads.
    - If the preemptor cannot fit even when all candidates are preempted, the evaluation terminates early.
 
 4. **Candidate Gathering & Strategy Merging (Alpha)**:
    - In Alpha, candidates are gathered by evaluating both preemption mechanisms:
      - **Classical Preemption**: Evaluates candidates according to `cq.Spec.Preemption` policies (e.g. workloads borrowing from the preemptor's ClusterQueue, or lower-priority workloads in the same CQ or cohort).
-     - **Configurable Preemption**: Evaluates candidates matching the rules and candidate selectors of the `PreemptionConfig` referenced by the `kueue.x-k8s.io/alpha-preemption-config` annotation (subject to trigger durations).
+     - **Configurable Preemption**: Evaluates candidates matching the rules and candidate selectors of the `PreemptionConfig` referenced by the `kueue.x-k8s.io/alpha-preemption-config` annotation (subject to matching triggers).
    - The candidate outputs of both strategies are **merged and deduplicated** into a single candidate set ($C_{\text{merged}} = C_{\text{classical}} \cup C_{\text{config}}$).
    - This provides maximum flexibility: users can run both strategies concurrently, or fully stop candidates from either mechanism (e.g., setting `reclaimWithinCohort: Never` and `withinClusterQueue: Never` disables classical candidates, while omitting the annotation disables configurable preemption candidates).
 
@@ -1100,7 +1094,7 @@ The test plan is focused on `PreemptionConfig` (`PreemptionLimit` is deferred to
 
 1. Trigger tracking — trigger states and observation timestamps are correctly recorded in memory when a workload cannot be admitted for a particular reason, preserved across requeues, and cleared upon admission or when resources become available.
 2. Preemption Evaluator:
-   - Uses only rules that are applicable according to the trigger and minimal trigger duration.
+   - Uses only rules that are applicable according to the trigger.
    - Orders candidates according to default preemption ordering rules (reusing classical preemption and fair sharing ordering logic).
    - Collects candidates from multiple rules and deduplicates.
    - Updates DRS and borrowing information dynamically — filtering out candidates that
@@ -1256,7 +1250,7 @@ Why should this KEP _not_ be implemented?
    - **Duplicate API Patches & Conflicts**: Because informer watch delivery is asynchronous, re-queuing the workload immediately while the watch event is in flight causes the scheduler to re-evaluate the workload repeatedly against stale cache state, generating duplicate status patch requests and triggering API server conflict errors (`409 Conflict`).
    - **Inadmissible Trapping vs. Infinite Busy-Loops**: If workloads requiring preemption were marked inadmissible after setting the condition, they would become stuck in `inadmissibleWorkloads` indefinitely because informer condition updates only update inadmissible workloads in place without re-queuing them to the active heap (unless an unrelated cluster event triggers `QueueInadmissibleWorkloads`). Conversely, keeping them in the active queue without conditions causes infinite busy-loops when preemption candidates do not exist in the cluster.
    - **etcd Churn & Scalability**: Updating status conditions in etcd on every unadmitted scheduling pass creates severe write amplification and API server pressure, particularly in busy clusters with high workload arrival rates and short scheduling intervals.
-   - **Conclusion**: Maintaining triggers and observation timestamps in-memory within the queue management and scheduler cache eliminates informer watch latency, avoids etcd write churn and duplicate API patches, and allows precise timer-based requeuing from inadmissible workloads for non-zero trigger durations.
+   - **Conclusion**: Maintaining triggers and observation timestamps in-memory within the queue management and scheduler cache eliminates informer watch latency, avoids etcd write churn and duplicate API patches, and allows immediate requeuing to the active heap (while laying the groundwork for timer-based requeuing for deferred `MinTriggerRequiredDuration` rules in future iterations).
 
 ## Future Work Ideas
 
@@ -1412,7 +1406,6 @@ spec:
   rules:
     - name: defrag-smaller-tpu-workloads
       trigger: "InsufficientTopology"
-      minTriggerRequiredDuration: "30s"
       candidateSelectors:
         - relativeWorkloadPriority: "LowerOrEqual"
           relationRequirement: "AnyClusterQueue"
@@ -1684,3 +1677,63 @@ spec:
   limit: 0
   limitWindowDuration: "1h"
 ```
+
+### Minimum Trigger Duration (MinTriggerRequiredDuration)
+
+In many production environments, administrators want to avoid premature or "flapping" preemptions caused by transient quota shortages or temporary topology fragmentation that might resolve naturally within a short window (e.g., as short jobs complete or as autoscaling nodes join). By requiring that a trigger condition (such as `InsufficientTopology`, `InsufficientQuota`, or `QuotaReclaimRequired`) persists for a minimum duration before evaluating candidate preemptions, clusters can grant a grace window for normal placement or natural workload completions before resorting to disruptive evictions.
+
+In the initial Alpha release, preemption evaluation triggers immediately upon observing the trigger condition in memory without timer-based requeueing, keeping the execution flow synchronous with scheduling passes and avoiding timer management complexity. In future iterations, `PreemptionRule` will be extended with `minTriggerRequiredDuration`.
+
+#### Proposed API for Minimum Trigger Duration
+
+```go
+type PreemptionRule struct {
+  // Name of the preemption rule.
+  Name string `json:"name"`
+
+  // MatchingPreemptorWorkloads specifies an optional label selector to limit which preemptor workloads can activate this rule.
+  MatchingPreemptorWorkloads metav1.LabelSelector `json:"matchingPreemptorWorkloads,omitempty"`
+
+  // Trigger specifies the condition (InsufficientQuota, QuotaReclaimRequired, or InsufficientTopology)
+  // that must be observed on the preemptor workload for this rule to apply.
+  Trigger PreemptionRuleTrigger `json:"trigger"`
+
+  // MinTriggerRequiredDuration specifies how long the trigger condition must be observed before
+  // preempting workloads specified by candidateSelectors. 0s indicates that preemptions can be started immediately.
+  // Defaults to 0s.
+  //
+  // +optional
+  // +kubebuilder:default="0s"
+  MinTriggerRequiredDuration metav1.Duration `json:"minTriggerRequiredDuration,omitempty"`
+
+  // CandidateSelectors specifies the selection rules for workloads that are candidates for preemption.
+  CandidateSelectors []PreemptionCandidateSelector `json:"candidateSelectors,omitempty"`
+}
+```
+
+When `minTriggerRequiredDuration` is configured with a duration greater than `0s`:
+- When an active trigger is first observed on an unadmitted workload, its observation timestamp is stored in the in-memory cache, and the workload is moved to `inadmissibleWorkloads`.
+- An in-memory timer is scheduled to requeue the workload back to the active queue once the required duration elapses.
+- During scheduling cycles, `PreemptionEvaluator` validates whether `now - inMemoryObserved >= minTriggerRequiredDuration` before considering the rule eligible for candidate selection.
+
+#### Examples with Minimum Trigger Duration
+
+##### Story 1 - Grace Period for Topology Defragmentation
+
+Delay defragmentation preemption by 30 seconds to give running workloads time to finish or allow the cluster autoscaler to provision a suitable topology domain before evicting smaller workloads:
+
+```yaml
+spec:
+  rules:
+    - name: defrag-smaller-tpu-workloads
+      trigger: "InsufficientTopology"
+      minTriggerRequiredDuration: "30s"
+      candidateSelectors:
+        - relativeWorkloadPriority: "LowerOrEqual"
+          relationRequirement: "AnyClusterQueue"
+          numericLabels:
+            - key: "tpus-count"
+              relation: "Lower"
+              defaultValue: 0
+```
+
