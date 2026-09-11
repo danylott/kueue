@@ -74,6 +74,7 @@
       - [Story 1 - Global Preemption Rate Limiting](#story-1---global-preemption-rate-limiting)
       - [Story 2 - Protecting a Mission-Critical ClusterQueue from Preemption](#story-2---protecting-a-mission-critical-clusterqueue-from-preemption)
   - [Minimum Trigger Duration (MinTriggerRequiredDuration)](#minimum-trigger-duration-mintriggerrequiredduration) - [Proposed API for Minimum Trigger Duration](#proposed-api-for-minimum-trigger-duration) - [Examples with Minimum Trigger Duration](#examples-with-minimum-trigger-duration) - [Story 1 - Grace Period for Topology Defragmentation](#story-1---grace-period-for-topology-defragmentation)
+  - [Per-Node DRA Device Feasibility Trigger (InsufficientDRADevices)](#per-node-dra-device-feasibility-trigger-insufficientdradevices)
   <!-- /toc -->
 
 ## Summary
@@ -268,6 +269,10 @@ demonstrate the interest in a KEP within the wider Kubernetes community.
 3. Support for preemptions using arbitrary Workload fields — this KEP aims to
    create a good baseline for configurations that can be extended in the future; it does not aim to be comprehensive for every possible scenario.
 4. Complete replacement of current preemption strategies.
+5. Preemptions based on fine-grained per-node DRA (Dynamic Resource Allocation) device feasibility.
+   While aggregate device quotas defined via ResourceClaimTemplates are handled under `InsufficientQuota`,
+   preemption driven by individual device allocation requires device identity tracking, which is deferred
+   to future work.
 
 ## Proposal
 
@@ -636,6 +641,12 @@ The supported in-memory trigger types are:
 - `InsufficientTopology`: Quota is available, but no topology domain satisfies the workload's topology requirements (TAS).
 
 By maintaining triggers in-memory, the scheduler avoids etcd write amplification, eliminates informer watch propagation latency between scheduling cycles, and prevents duplicate API patch conflicts, while providing the foundation to support deferred duration-based rules (`MinTriggerRequiredDuration`) in future iterations.
+
+> [!NOTE]
+> **Relationship with Dynamic Resource Allocation (DRA)**:
+> Workloads requesting devices via `ResourceClaimTemplate` objects mapped to Kueue resource flavors and quotas are evaluated under `InsufficientQuota`. Preempting candidates holding such quota frees device capacity deterministically.
+>
+> In contrast, per-node DRA device feasibility (evaluating whether a single node has devices matching claim constraints) is explicitly **not** folded into `InsufficientTopology`. `InsufficientTopology` is strictly reserved for Topology-Aware Scheduling (TAS) domains (blocks, racks, nodes) where Kueue directly manages placement. Swiping DRA device feasibility into `InsufficientTopology` would cause non-deterministic preemptions because Kueue does not track which specific device instances are allocated to running workloads. Dedicated per-node DRA preemption is deferred to future work.
 
 ```go
 
@@ -1802,3 +1813,32 @@ spec:
               relation: "Lower"
               defaultValue: 0
 ```
+
+### Per-Node DRA Device Feasibility Trigger (InsufficientDRADevices)
+
+Dynamic Resource Allocation (DRA) enables fine-grained hardware device requests via ResourceClaims. While aggregate device counts defined via `ResourceClaimTemplates` are already mapped to Kueue flavors and protected by `InsufficientQuota`, per-node device feasibility presents unique challenges for preemption:
+
+1. **Lack of Device Allocation Tracking in Kueue**:
+   ResourceClaims are bound to specific physical devices by `kube-scheduler` and DRA device drivers during Pod scheduling, not by Kueue. Consequently, Kueue does not track device-to-workload bindings or device identities in its in-memory cache.
+
+2. **The Problem with Blind Preemption**:
+   Preemption triggers require causal determinism: evicting candidate workloads must reliably satisfy the preemptor's unmet requirement. If Kueue triggers preemption for a workload failing per-node device feasibility without knowing which running workloads occupy the required devices, it would have to select candidates blindly. Evicting a candidate that does not hold the needed device would disrupt workloads without allowing the preemptor to admit, leading to cascading, fruitless evictions.
+
+3. **Separation from Topology-Aware Scheduling (TAS)**:
+   Per-node device feasibility constraints are fundamentally distinct from TAS topology domains (racks, blocks). Folding device feasibility under `InsufficientTopology` would break the semantic clarity of TAS rules and cause rules written for rack/block defragmentation to trigger unwanted evictions on device constraint failures.
+
+#### Future Evolution
+
+Once Kueue or the Kubernetes DRA ecosystem supports tracking ResourceClaim allocation status and device identities, a dedicated trigger can be introduced:
+
+```go
+const (
+  // InsufficientDRADevices indicates that aggregate quota is available, but per-node
+  // DRA device feasibility constraints cannot be satisfied without preempting workloads
+  // holding the required device instances.
+  InsufficientDRADevices PreemptionRuleTrigger = "InsufficientDRADevices"
+)
+```
+
+With device identity modeling, the preemption simulation will be able to verify that evicting a specific workload frees the exact device(s) or device topology needed by the incoming claim before any eviction is executed.
+
