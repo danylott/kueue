@@ -172,6 +172,7 @@ type PreemptionCandidateSelector struct {
 	// Accepts all if not set.
 	// +optional
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
+
 	// RelativeWorkloadPriority defines how the preemptor's priority compares to the candidate's priority.
 	// For example "Lower" means that only workloads with lower priority will be allowed as preemption candidates.
 	// The comparison is made using effective priority (accounting for priority boost if enabled).

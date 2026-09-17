@@ -117,7 +117,7 @@ func buildWorkloadLabelFilter(
 	}
 	ls, err := metav1.LabelSelectorAsSelector(selector)
 	if err != nil {
-		log.Error(err, "Invalid LabelSelector", "selector", selector)
+		log.V(3).Info("Invalid LabelSelector", "error", err, "selector", selector)
 		return nil, false
 	}
 	if ls.Empty() {
