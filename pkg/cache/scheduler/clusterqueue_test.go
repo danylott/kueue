@@ -651,8 +651,10 @@ func TestClusterQueueReadinessWithTAS(t *testing.T) {
 }
 
 func TestClusterQueueLabels(t *testing.T) {
+	const cqName = "cq"
+
 	ctx, log := utiltesting.ContextWithLog(t)
-	cq := utiltestingapi.MakeClusterQueue("cq").
+	cq := utiltestingapi.MakeClusterQueue(cqName).
 		Label("env", "prod").
 		Label("tier", "batch").
 		Obj()
@@ -666,7 +668,7 @@ func TestClusterQueueLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to snapshot: %v", err)
 	}
-	if diff := cmp.Diff(map[string]string{"env": "prod", "tier": "batch"}, snap.ClusterQueue("cq").Labels); diff != "" {
+	if diff := cmp.Diff(map[string]string{"env": "prod", "tier": "batch"}, snap.ClusterQueue(cqName).Labels); diff != "" {
 		t.Errorf("Unexpected snapshot labels (-want,+got):\n%s", diff)
 	}
 
@@ -676,12 +678,12 @@ func TestClusterQueueLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to snapshot: %v", err)
 	}
-	if diff := cmp.Diff(map[string]string{"env": "prod", "tier": "batch"}, snap2.ClusterQueue("cq").Labels); diff != "" {
+	if diff := cmp.Diff(map[string]string{"env": "prod", "tier": "batch"}, snap2.ClusterQueue(cqName).Labels); diff != "" {
 		t.Errorf("Snapshot was mutated by modifying original object (-want,+got):\n%s", diff)
 	}
 
 	// Verify UpdateClusterQueue updates labels and clones them
-	updatedCQ := utiltestingapi.MakeClusterQueue("cq").
+	updatedCQ := utiltestingapi.MakeClusterQueue(cqName).
 		Label("env", "staging").
 		Obj()
 	if err := cache.UpdateClusterQueue(log, updatedCQ); err != nil {
@@ -691,7 +693,7 @@ func TestClusterQueueLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to snapshot: %v", err)
 	}
-	if diff := cmp.Diff(map[string]string{"env": "staging"}, snap3.ClusterQueue("cq").Labels); diff != "" {
+	if diff := cmp.Diff(map[string]string{"env": "staging"}, snap3.ClusterQueue(cqName).Labels); diff != "" {
 		t.Errorf("Unexpected updated snapshot labels (-want,+got):\n%s", diff)
 	}
 
@@ -701,8 +703,18 @@ func TestClusterQueueLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to snapshot: %v", err)
 	}
-	if diff := cmp.Diff(map[string]string{"env": "staging"}, snap4.ClusterQueue("cq").Labels); diff != "" {
+	if diff := cmp.Diff(map[string]string{"env": "staging"}, snap4.ClusterQueue(cqName).Labels); diff != "" {
 		t.Errorf("Snapshot was mutated by modifying updated object (-want,+got):\n%s", diff)
+	}
+
+	// Verify DeleteClusterQueue removes it from subsequent snapshots
+	cache.DeleteClusterQueue(updatedCQ)
+	snap5, err := cache.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Failed to snapshot: %v", err)
+	}
+	if snap5.ClusterQueue(cqName) != nil {
+		t.Errorf("Expected ClusterQueue %q to be deleted from snapshot, but it was present", cqName)
 	}
 }
 

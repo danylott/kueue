@@ -19,27 +19,16 @@ package filters
 import (
 	"testing"
 
+	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 
 	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 )
 
 func TestClusterQueueLabelFilter_Matches(t *testing.T) {
-	parseSelector := func(ls *metav1.LabelSelector) labels.Selector {
-		if ls == nil {
-			return nil
-		}
-		sel, err := metav1.LabelSelectorAsSelector(ls)
-		if err != nil {
-			t.Fatalf("failed to parse selector: %v", err)
-		}
-		return sel
-	}
-
 	cases := map[string]struct {
 		cq        *schdcache.ClusterQueueSnapshot
-		selector  labels.Selector
+		selector  *metav1.LabelSelector
 		wantMatch bool
 	}{
 		"matching labels returns true": {
@@ -47,7 +36,7 @@ func TestClusterQueueLabelFilter_Matches(t *testing.T) {
 				Name:   "cq1",
 				Labels: map[string]string{"env": "prod", "team": "batch"},
 			},
-			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}}),
+			selector:  &metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}},
 			wantMatch: true,
 		},
 		"non-matching label value returns false": {
@@ -55,7 +44,7 @@ func TestClusterQueueLabelFilter_Matches(t *testing.T) {
 				Name:   "cq1",
 				Labels: map[string]string{"env": "dev"},
 			},
-			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}}),
+			selector:  &metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}},
 			wantMatch: false,
 		},
 		"missing required label returns false": {
@@ -63,14 +52,14 @@ func TestClusterQueueLabelFilter_Matches(t *testing.T) {
 				Name:   "cq1",
 				Labels: map[string]string{"team": "batch"},
 			},
-			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}}),
+			selector:  &metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}},
 			wantMatch: false,
 		},
 		"ClusterQueue with nil labels returns false": {
 			cq: &schdcache.ClusterQueueSnapshot{
 				Name: "cq1",
 			},
-			selector:  parseSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}}),
+			selector:  &metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}},
 			wantMatch: false,
 		},
 		"matching matchExpressions returns true": {
@@ -78,11 +67,11 @@ func TestClusterQueueLabelFilter_Matches(t *testing.T) {
 				Name:   "cq1",
 				Labels: map[string]string{"tier": "batch"},
 			},
-			selector: parseSelector(&metav1.LabelSelector{
+			selector: &metav1.LabelSelector{
 				MatchExpressions: []metav1.LabelSelectorRequirement{
 					{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"batch", "ml"}},
 				},
-			}),
+			},
 			wantMatch: true,
 		},
 		"non-matching matchExpressions returns false": {
@@ -90,18 +79,21 @@ func TestClusterQueueLabelFilter_Matches(t *testing.T) {
 				Name:   "cq1",
 				Labels: map[string]string{"tier": "general"},
 			},
-			selector: parseSelector(&metav1.LabelSelector{
+			selector: &metav1.LabelSelector{
 				MatchExpressions: []metav1.LabelSelectorRequirement{
 					{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"batch", "ml"}},
 				},
-			}),
+			},
 			wantMatch: false,
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			filter := newClusterQueueLabelFilter(tc.selector)
+			filter, ok := buildClusterQueueLabelFilter(logr.Discard(), tc.selector)
+			if !ok {
+				t.Fatalf("buildClusterQueueLabelFilter failed unexpectedly")
+			}
 			if got := filter.Matches(tc.cq); got != tc.wantMatch {
 				t.Errorf("Matches(cq) = %v, want %v", got, tc.wantMatch)
 			}
