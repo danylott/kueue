@@ -140,20 +140,7 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 					gomega.HaveField("ObjectMeta.Name", preemptionConfig.Name)))
 			})
 
-			ginkgo.By("Returning a Forbidden error for a create request", func() {
-				_, err := preemptionConfigs.Create(ctx, preemptionConfig, metav1.CreateOptions{})
-				gomega.Expect(err).Should(utiltesting.BeForbiddenError())
-			})
-
-			ginkgo.By("Returning a Forbidden error for an update request", func() {
-				_, err := preemptionConfigs.Update(ctx, preemptionConfig, metav1.UpdateOptions{})
-				gomega.Expect(err).Should(utiltesting.BeForbiddenError())
-			})
-
-			ginkgo.By("Returning a Forbidden error for a delete request", func() {
-				err := preemptionConfigs.Delete(ctx, preemptionConfig.Name, metav1.DeleteOptions{})
-				gomega.Expect(err).Should(utiltesting.BeForbiddenError())
-			})
+			expectPreemptionConfigAccessForbiddenForWrites(viewerClient, preemptionConfig)
 		})
 	})
 
@@ -226,17 +213,6 @@ func expectPreemptionConfigAccessForbidden(c kueueclientset.Interface, name stri
 	ginkgo.GinkgoHelper()
 
 	preemptionConfigs := c.KueueV1beta2().PreemptionConfigs()
-	preemptionConfig := &kueue.PreemptionConfig{ObjectMeta: metav1.ObjectMeta{Name: name}}
-
-	// Only needed if a create unexpectedly succeeds.
-	ginkgo.DeferCleanup(func() {
-		util.ExpectObjectToBeDeleted(ctx, k8sClient, preemptionConfig, true)
-	})
-
-	ginkgo.By("Returning a Forbidden error for a create request", func() {
-		_, err := preemptionConfigs.Create(ctx, preemptionConfig, metav1.CreateOptions{})
-		gomega.Expect(err).Should(utiltesting.BeForbiddenError())
-	})
 
 	ginkgo.By("Returning a Forbidden error for a get request", func() {
 		_, err := preemptionConfigs.Get(ctx, name, metav1.GetOptions{})
@@ -248,13 +224,33 @@ func expectPreemptionConfigAccessForbidden(c kueueclientset.Interface, name stri
 		gomega.Expect(err).Should(utiltesting.BeForbiddenError())
 	})
 
+	preemptionConfig := &kueue.PreemptionConfig{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	// Only needed if the create below unexpectedly succeeds.
+	ginkgo.DeferCleanup(func() {
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, preemptionConfig, true)
+	})
+	expectPreemptionConfigAccessForbiddenForWrites(c, preemptionConfig)
+}
+
+// expectPreemptionConfigAccessForbiddenForWrites asserts that c is denied every write verb on
+// preemptionConfig.
+func expectPreemptionConfigAccessForbiddenForWrites(c kueueclientset.Interface, preemptionConfig *kueue.PreemptionConfig) {
+	ginkgo.GinkgoHelper()
+
+	preemptionConfigs := c.KueueV1beta2().PreemptionConfigs()
+
+	ginkgo.By("Returning a Forbidden error for a create request", func() {
+		_, err := preemptionConfigs.Create(ctx, preemptionConfig, metav1.CreateOptions{})
+		gomega.Expect(err).Should(utiltesting.BeForbiddenError())
+	})
+
 	ginkgo.By("Returning a Forbidden error for an update request", func() {
 		_, err := preemptionConfigs.Update(ctx, preemptionConfig, metav1.UpdateOptions{})
 		gomega.Expect(err).Should(utiltesting.BeForbiddenError())
 	})
 
 	ginkgo.By("Returning a Forbidden error for a delete request", func() {
-		err := preemptionConfigs.Delete(ctx, name, metav1.DeleteOptions{})
+		err := preemptionConfigs.Delete(ctx, preemptionConfig.Name, metav1.DeleteOptions{})
 		gomega.Expect(err).Should(utiltesting.BeForbiddenError())
 	})
 }
