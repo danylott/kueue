@@ -30,26 +30,22 @@ import (
 
 const (
 	preemptionConfigAdminUser  = "preemptionconfig-test-admin"
+	preemptionConfigViewerUser = "preemptionconfig-test-viewer"
 	preemptionConfigBatchUser  = "preemptionconfig-test-user"
 	preemptionConfigNoRoleUser = "preemptionconfig-test-nobody"
 )
 
 var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluster", "feature:rbac"), func() {
 	ginkgo.When("A subject is bound to kueue-batch-admin-role", func() {
-		var (
-			adminClient        kueueclientset.Interface
-			clusterRoleBinding *rbacv1.ClusterRoleBinding
-		)
+		var adminClient kueueclientset.Interface
 
 		ginkgo.BeforeEach(func() {
-			adminClient, clusterRoleBinding = bindUserToClusterRole(preemptionConfigAdminUser, "kueue-batch-admin-role")
-		})
-
-		ginkgo.AfterEach(func() {
-			util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterRoleBinding, true)
+			adminClient = bindUserToClusterRole(
+				preemptionConfigAdminUser, "kueue-batch-admin-role", listLocalQueues)
 		})
 
 		ginkgo.It("Should allow the full PreemptionConfig lifecycle", func() {
+			preemptionConfigs := adminClient.KueueV1beta2().PreemptionConfigs()
 			preemptionConfig := &kueue.PreemptionConfig{
 				ObjectMeta: metav1.ObjectMeta{Name: "preemptionconfig-rbac-admin"},
 				Spec: kueue.PreemptionConfigSpec{
@@ -66,19 +62,19 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 			})
 
 			ginkgo.By("Creating a PreemptionConfig", func() {
-				created, err := adminClient.KueueV1beta2().PreemptionConfigs().Create(ctx, preemptionConfig, metav1.CreateOptions{})
+				created, err := preemptionConfigs.Create(ctx, preemptionConfig, metav1.CreateOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
 				preemptionConfig = created
 			})
 
 			ginkgo.By("Getting the PreemptionConfig", func() {
-				got, err := adminClient.KueueV1beta2().PreemptionConfigs().Get(ctx, preemptionConfig.Name, metav1.GetOptions{})
+				got, err := preemptionConfigs.Get(ctx, preemptionConfig.Name, metav1.GetOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
 				gomega.Expect(got.Spec.Rules).Should(gomega.HaveLen(1))
 			})
 
 			ginkgo.By("Listing the PreemptionConfigs", func() {
-				list, err := adminClient.KueueV1beta2().PreemptionConfigs().List(ctx, metav1.ListOptions{})
+				list, err := preemptionConfigs.List(ctx, metav1.ListOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
 				gomega.Expect(list.Items).Should(gomega.ContainElement(
 					gomega.HaveField("ObjectMeta.Name", preemptionConfig.Name)))
@@ -88,31 +84,85 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 				// No Eventually: nothing else writes this object, so a retry would only hide a
 				// missing update verb behind a timeout.
 				preemptionConfig.Spec.Rules[0].Candidates[0].RelationRequirement = kueue.SameCohort
-				updated, err := adminClient.KueueV1beta2().PreemptionConfigs().Update(ctx, preemptionConfig, metav1.UpdateOptions{})
+				updated, err := preemptionConfigs.Update(ctx, preemptionConfig, metav1.UpdateOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
 				gomega.Expect(updated.Spec.Rules[0].Candidates[0].RelationRequirement).Should(gomega.Equal(kueue.SameCohort))
 				preemptionConfig = updated
 			})
 
 			ginkgo.By("Deleting the PreemptionConfig", func() {
-				err := adminClient.KueueV1beta2().PreemptionConfigs().Delete(ctx, preemptionConfig.Name, metav1.DeleteOptions{})
+				err := preemptionConfigs.Delete(ctx, preemptionConfig.Name, metav1.DeleteOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			})
 		})
 	})
 
-	ginkgo.When("A subject is bound to kueue-batch-user-role", func() {
+	ginkgo.When("A subject is bound to kueue-preemptionconfig-viewer-role", func() {
 		var (
-			userClient         kueueclientset.Interface
-			clusterRoleBinding *rbacv1.ClusterRoleBinding
+			viewerClient     kueueclientset.Interface
+			preemptionConfig *kueue.PreemptionConfig
 		)
 
 		ginkgo.BeforeEach(func() {
-			userClient, clusterRoleBinding = bindUserToClusterRole(preemptionConfigBatchUser, "kueue-batch-user-role")
+			// The viewer cannot create its own fixture, so the suite's admin client does it.
+			preemptionConfig = &kueue.PreemptionConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: "preemptionconfig-rbac-viewer"},
+				Spec: kueue.PreemptionConfigSpec{
+					Rules: []kueue.PreemptionRule{{
+						Name:       "rule",
+						Trigger:    kueue.InsufficientQuota,
+						Candidates: []kueue.PreemptionCandidateSelector{{RelationRequirement: kueue.SameClusterQueue}},
+					}},
+				},
+			}
+			util.MustCreate(ctx, k8sClient, preemptionConfig)
+			ginkgo.DeferCleanup(func() {
+				util.ExpectObjectToBeDeleted(ctx, k8sClient, preemptionConfig, true)
+			})
+
+			viewerClient = bindUserToClusterRole(
+				preemptionConfigViewerUser, "kueue-preemptionconfig-viewer-role", listPreemptionConfigs)
 		})
 
-		ginkgo.AfterEach(func() {
-			util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterRoleBinding, true)
+		ginkgo.It("Should allow reads but forbid writes", func() {
+			preemptionConfigs := viewerClient.KueueV1beta2().PreemptionConfigs()
+
+			ginkgo.By("Getting the PreemptionConfig", func() {
+				got, err := preemptionConfigs.Get(ctx, preemptionConfig.Name, metav1.GetOptions{})
+				gomega.Expect(err).NotTo(gomega.HaveOccurred())
+				gomega.Expect(got.Spec.Rules).Should(gomega.HaveLen(1))
+			})
+
+			ginkgo.By("Listing the PreemptionConfigs", func() {
+				list, err := preemptionConfigs.List(ctx, metav1.ListOptions{})
+				gomega.Expect(err).NotTo(gomega.HaveOccurred())
+				gomega.Expect(list.Items).Should(gomega.ContainElement(
+					gomega.HaveField("ObjectMeta.Name", preemptionConfig.Name)))
+			})
+
+			ginkgo.By("Returning a Forbidden error for a create request", func() {
+				_, err := preemptionConfigs.Create(ctx, preemptionConfig, metav1.CreateOptions{})
+				gomega.Expect(err).Should(utiltesting.BeForbiddenError())
+			})
+
+			ginkgo.By("Returning a Forbidden error for an update request", func() {
+				_, err := preemptionConfigs.Update(ctx, preemptionConfig, metav1.UpdateOptions{})
+				gomega.Expect(err).Should(utiltesting.BeForbiddenError())
+			})
+
+			ginkgo.By("Returning a Forbidden error for a delete request", func() {
+				err := preemptionConfigs.Delete(ctx, preemptionConfig.Name, metav1.DeleteOptions{})
+				gomega.Expect(err).Should(utiltesting.BeForbiddenError())
+			})
+		})
+	})
+
+	ginkgo.When("A subject is bound to kueue-batch-user-role", func() {
+		var userClient kueueclientset.Interface
+
+		ginkgo.BeforeEach(func() {
+			userClient = bindUserToClusterRole(
+				preemptionConfigBatchUser, "kueue-batch-user-role", listLocalQueues)
 		})
 
 		ginkgo.It("Should be Forbidden from accessing PreemptionConfigs", func() {
@@ -128,29 +178,46 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 	})
 })
 
-// bindUserToClusterRole binds user to clusterRole and returns a clientset acting as that user.
+// bindUserToClusterRole binds user to clusterRole and returns a clientset acting as that user,
+// once probe confirms the binding is in effect. The binding is removed when the spec ends.
+//
 // The binding is cluster-wide because PreemptionConfig is cluster-scoped: a RoleBinding would deny
 // access on scope alone, making the Forbidden assertions pass for the wrong reason.
-func bindUserToClusterRole(user, clusterRole string) (kueueclientset.Interface, *rbacv1.ClusterRoleBinding) {
+func bindUserToClusterRole(user, clusterRole string, probe func(kueueclientset.Interface) error) kueueclientset.Interface {
 	ginkgo.GinkgoHelper()
 
-	binding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "preemptionconfig-rbac-"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterRole},
-		Subjects:   []rbacv1.Subject{{Name: user, APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind}},
-	}
+	binding := utiltesting.MakeClusterRoleBinding(user+"-binding").
+		RoleRef(rbacv1.GroupName, "ClusterRole", clusterRole).
+		UserSubject(user).
+		Obj()
 	util.MustCreate(ctx, k8sClient, binding)
-	clientset := util.CreateKueueClientset(user)
+	// Registered before the gate below: a gate failure must not leak this cluster-scoped object,
+	// or the next run collides with it on create.
+	ginkgo.DeferCleanup(func() {
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, binding, true)
+	})
 
+	clientset := util.CreateKueueClientset(user)
 	ginkgo.By("Wait for an already granted request to succeed to make sure the role binding is in effect", func() {
-		// Probe LocalQueues, which both roles grant, rather than PreemptionConfigs: gating on the
-		// permission under test would report a real regression as an opaque BeforeEach timeout.
 		gomega.Eventually(func(g gomega.Gomega) {
-			_, err := clientset.KueueV1beta2().LocalQueues(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
-			g.Expect(err).NotTo(gomega.HaveOccurred())
+			g.Expect(probe(clientset)).To(gomega.Succeed())
 		}, util.Timeout, util.Interval).Should(gomega.Succeed())
 	})
-	return clientset, binding
+	return clientset
+}
+
+// listLocalQueues is the readiness probe for roles that grant more than PreemptionConfigs. Probing
+// the permission under test would report a real regression as an opaque BeforeEach timeout.
+func listLocalQueues(c kueueclientset.Interface) error {
+	_, err := c.KueueV1beta2().LocalQueues(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	return err
+}
+
+// listPreemptionConfigs is the readiness probe for preemptionconfig-viewer, which grants nothing
+// else. That makes the list assertion in that spec tautological, but its denials still hold.
+func listPreemptionConfigs(c kueueclientset.Interface) error {
+	_, err := c.KueueV1beta2().PreemptionConfigs().List(ctx, metav1.ListOptions{})
+	return err
 }
 
 // expectPreemptionConfigAccessForbidden asserts that c is denied every verb on PreemptionConfigs.
