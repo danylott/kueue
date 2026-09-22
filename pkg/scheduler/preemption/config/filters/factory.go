@@ -141,14 +141,10 @@ func buildPriorityFilters(
 	selector *kueue.PreemptionConfigPreemptionCandidateSelector,
 	preemptor *workload.Info,
 ) []WorkloadFilter {
-	if selector == nil {
+	if selector == nil || selector.Priority == nil {
 		return nil
 	}
-	var filters []WorkloadFilter
-	if selector.RelativeWorkloadPriority != nil {
-		filters = append(filters, NewRelativeWorkloadPriorityFilter(log, *selector.RelativeWorkloadPriority, preemptor))
-	}
-	return filters
+	return []WorkloadFilter{NewPriorityFilter(log, *selector.Priority, preemptor)}
 }
 
 func buildClusterQueueLabelFilter(

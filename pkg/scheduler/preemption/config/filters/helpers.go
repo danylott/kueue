@@ -42,3 +42,20 @@ func matchesComparison(log logr.Logger, comparison *kueue.NumericComparison, can
 		return false
 	}
 }
+
+// matchesNumericComparison evaluates numeric comparisons between candidate and preemptor values.
+func matchesNumericComparison(log logr.Logger, comp kueue.NumericComparison, candidateVal, preemptorVal int64) bool {
+	switch comp {
+	case kueue.LessThan:
+		return candidateVal < preemptorVal
+	case kueue.LessThanOrEqual:
+		return candidateVal <= preemptorVal
+	case kueue.GreaterThan:
+		return candidateVal > preemptorVal
+	case kueue.GreaterThanOrEqual:
+		return candidateVal >= preemptorVal
+	default:
+		log.V(3).Info("Unsupported or unhandled numeric comparison evaluated; candidate rejected", "comparison", comp)
+		return false
+	}
+}

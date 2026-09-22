@@ -25,30 +25,46 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-type relativeWorkloadPriorityFilter struct {
+type priorityFilter struct {
 	log               logr.Logger
+	mode              kueue.PreemptionConfigPriorityMode
 	comparison        kueue.NumericComparison
 	preemptorPriority int64
 }
 
-// NewRelativeWorkloadPriorityFilter creates a WorkloadFilter to evaluate candidate workloads
-// based on relative workload priority compared against the preemptor workload.
-// The effective priority (accounting for priority boost if configured) is used for comparison.
-func NewRelativeWorkloadPriorityFilter(log logr.Logger, comparison kueue.NumericComparison, preemptor *workload.Info) WorkloadFilter {
-	filterLog := log.WithValues("filter", "RelativeWorkloadPriority", "comparison", comparison)
+// NewPriorityFilter creates a WorkloadFilter to evaluate candidate workloads
+// based on the priority constraint compared against the preemptor workload.
+func NewPriorityFilter(log logr.Logger, constraint kueue.PreemptionConfigPriorityConstraint, preemptor *workload.Info) WorkloadFilter {
+	filterLog := log.WithValues("filter", "Priority", "mode", constraint.Mode, "comparison", constraint.Comparison)
 	preemptorLog := filterLog.WithValues("preemptor", klog.KObj(preemptor.Obj))
-	preemptorPriority := priority.EffectivePriority(preemptorLog, preemptor.Obj)
+	preemptorPriority, _ := workloadPriority(preemptorLog, constraint.Mode, preemptor)
 
-	return &relativeWorkloadPriorityFilter{
+	return &priorityFilter{
 		log:               filterLog,
-		comparison:        comparison,
+		mode:              constraint.Mode,
+		comparison:        constraint.Comparison,
 		preemptorPriority: preemptorPriority,
 	}
 }
 
-// Matches evaluates a candidate workload's effective priority against the preemptor's priority.
-func (f *relativeWorkloadPriorityFilter) Matches(wl *workload.Info) bool {
+// Matches evaluates a candidate workload's priority against the preemptor's priority.
+func (f *priorityFilter) Matches(wl *workload.Info) bool {
 	candLog := f.log.WithValues("candidate", klog.KObj(wl.Obj))
-	candPriority := priority.EffectivePriority(candLog, wl.Obj)
-	return matchesComparison(candLog, &f.comparison, candPriority, f.preemptorPriority)
+	candPriority, ok := workloadPriority(candLog, f.mode, wl)
+	if !ok {
+		return false
+	}
+	return matchesNumericComparison(candLog, f.comparison, candPriority, f.preemptorPriority)
+}
+
+func workloadPriority(log logr.Logger, mode kueue.PreemptionConfigPriorityMode, wl *workload.Info) (int64, bool) {
+	switch mode {
+	case kueue.Base:
+		return int64(priority.Priority(wl.Obj)), true
+	case kueue.Boosted:
+		return priority.EffectivePriority(log, wl.Obj), true
+	default:
+		log.V(3).Info("Unsupported or unhandled priority mode evaluated", "mode", mode)
+		return 0, false
+	}
 }
