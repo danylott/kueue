@@ -224,7 +224,13 @@ func TestPriorityFilter_Matches(t *testing.T) {
 			}
 			candidate := workload.NewInfo(candBuilder.Obj())
 
-			filter := NewPriorityFilter(logr.Discard(), tc.constraint, preemptor)
+			filter, ok := NewPriorityFilter(logr.Discard(), tc.constraint, preemptor)
+			if !ok {
+				if tc.wantMatch {
+					t.Fatalf("NewPriorityFilter() failed unexpectedly")
+				}
+				return
+			}
 			if got := filter.Matches(candidate); got != tc.wantMatch {
 				t.Errorf("Matches(candidate) = %v, want %v", got, tc.wantMatch)
 			}
@@ -349,7 +355,10 @@ func TestPriorityFilter_PriorityBoost(t *testing.T) {
 			}
 			candidate := workload.NewInfo(candBuilder.Obj())
 
-			filter := NewPriorityFilter(logr.Discard(), tc.constraint, preemptor)
+			filter, ok := NewPriorityFilter(logr.Discard(), tc.constraint, preemptor)
+			if !ok {
+				t.Fatalf("NewPriorityFilter() failed unexpectedly")
+			}
 			if got := filter.Matches(candidate); got != tc.wantMatch {
 				t.Errorf("Matches(candidate) = %v, want %v", got, tc.wantMatch)
 			}

@@ -397,6 +397,18 @@ func TestNewCandidateFilters(t *testing.T) {
 			wantFilters:   CandidateFilters{},
 			wantRejectAll: true,
 		},
+		"Priority with invalid mode returns rejectAll true": {
+			selector: &kueue.PreemptionConfigPreemptionCandidateSelector{
+				Scope: kueue.WithinClusterQueue,
+				Priority: &kueue.PreemptionConfigPriorityConstraint{
+					Mode:       kueue.PreemptionConfigPriorityMode("InvalidMode"),
+					Comparison: kueue.LessThan,
+				},
+			},
+			preemptor:     preemptor,
+			wantFilters:   CandidateFilters{},
+			wantRejectAll: true,
+		},
 	}
 
 	cmpOptions := []cmp.Option{
@@ -411,7 +423,7 @@ func TestNewCandidateFilters(t *testing.T) {
 			priorityFilter{},
 		),
 		cmpopts.IgnoreFields(numericLabelFilter{}, "log"),
-		cmpopts.IgnoreFields(priorityFilter{}, "log"),
+		cmpopts.IgnoreFields(priorityFilter{}, "log", "priorityFn"),
 		cmp.Comparer(func(a, b labels.Selector) bool {
 			if a == nil && b == nil {
 				return true
