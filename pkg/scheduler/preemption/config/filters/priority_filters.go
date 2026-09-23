@@ -54,7 +54,7 @@ func (f *priorityFilter) Matches(wl *workload.Info) bool {
 	if !ok {
 		return false
 	}
-	return matchesNumericComparison(candLog, f.comparison, candPriority, f.preemptorPriority)
+	return matchesComparison(candLog, &f.comparison, candPriority, f.preemptorPriority)
 }
 
 func workloadPriority(log logr.Logger, mode kueue.PreemptionConfigPriorityMode, wl *workload.Info) (int64, bool) {
