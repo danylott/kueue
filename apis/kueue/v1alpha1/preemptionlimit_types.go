@@ -119,33 +119,41 @@ type PreemptionLimitSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	Limit int32 `json:"limit"`
 
-	// limitWindowDuration specifies the sliding time window duration.
-	// Must be greater than or equal to 1s to prevent sub-second thrashing.
+	// limitWindowSeconds specifies the sliding time window duration, in seconds.
+	// Must be greater than or equal to 1 to prevent sub-second thrashing.
 	//
 	// +required
-	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1s')",message="must be at least 1s"
-	LimitWindowDuration metav1.Duration `json:"limitWindowDuration,omitzero"`
+	// +kubebuilder:validation:Minimum=1
+	LimitWindowSeconds int32 `json:"limitWindowSeconds,omitempty"`
 }
 
 // PreemptionLimitStatus defines the observed state of PreemptionLimit
 type PreemptionLimitStatus struct {
-	// conditions represents the current state of the PreemptionLimit.
-	//
-	// +optional
-	// +listType=map
-	// +listMapKey=type
-	// +patchStrategy=merge
-	// +patchMergeKey=type
-	// +kubebuilder:validation:MaxItems=16
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
-
-	// count is periodically updated, for reference only.
-	// Map key depends on the scope. For Global it is just Global.
-	// For CQ it is ClusterQueue name.
-	// For Workload it is namespace + "/" + workload name.
+	// counts is periodically updated, for reference only.
 	// Restricted to the top 1000 counts to fit within CRD size limits.
 	//
 	// +optional
-	// +kubebuilder:validation:MaxProperties=1000
-	Count map[string]int32 `json:"count,omitempty"`
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=1000
+	Counts []PreemptionLimitCount `json:"counts,omitempty"`
+}
+
+// PreemptionLimitCount tracks the number of preemptions for a single scoped entity.
+type PreemptionLimitCount struct {
+	// name identifies the scoped entity.
+	// For Global scope it is "Global".
+	// For PreemptingClusterQueue and PreemptedClusterQueue scopes it is the ClusterQueue name.
+	// For PreemptedWorkload scope it is "<namespace>/<workload-name>".
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	Name string `json:"name"`
+
+	// count is the number of preemptions recorded within the sliding time window.
+	//
+	// +required
+	// +kubebuilder:validation:Minimum=0
+	Count int32 `json:"count"`
 }

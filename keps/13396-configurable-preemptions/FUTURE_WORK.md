@@ -662,7 +662,7 @@ In a future iteration, `PreemptionLimit` will be introduced as a cluster-scoped 
 type PreemptionLimit struct {
   metav1.TypeMeta `json:",inline"`
   metav1.ObjectMeta `json:"metadata,omitempty"`
-  Spec PreemptionLimitSpec `json:"spec,omitempty"`
+  Spec PreemptionLimitSpec `json:"spec"`
   Status PreemptionLimitStatus `json:"status,omitempty"`
 }
 
@@ -676,63 +676,86 @@ const (
 )
 
 type PreemptionLimitSpec struct {
-  // Scope specifies the entity boundary for this preemption limit.
+  // scope specifies the entity boundary for this preemption limit.
   //
-  // +kubebuilder:validation:Required
-  Scope PreemptionLimitScope `json:"scope"`
+  // +required
+  Scope PreemptionLimitScope `json:"scope,omitempty"`
 
-  // ConfigSelector selects PreemptionConfigs to which this limit applies.
+  // configSelector selects PreemptionConfigs to which this limit applies.
   // If not set, it applies to all PreemptionConfigs.
   //
   // +optional
   ConfigSelector *metav1.LabelSelector `json:"configSelector,omitempty"`
 
-  // ClusterQueueSelector selects ClusterQueues to which this limit applies.
+  // clusterQueueSelector selects ClusterQueues to which this limit applies.
   // If not set, it applies to all ClusterQueues under the configured scope.
   //
   // +optional
   ClusterQueueSelector *metav1.LabelSelector `json:"clusterQueueSelector,omitempty"`
 
-  // RuleNames restricts the limit to specific rule names within matching PreemptionConfigs.
+  // ruleNames restricts the limit to specific rule names within matching PreemptionConfigs.
   // If not set, it applies to all rules.
   //
   // +optional
+  // +listType=set
+  // +kubebuilder:validation:MaxItems=64
+  // +kubebuilder:validation:items:MinLength=1
+  // +kubebuilder:validation:items:MaxLength=63
+  // +kubebuilder:validation:items:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
   RuleNames []string `json:"ruleNames,omitempty"`
 
-  // Limit defines how many preemption events can occur within the given time window.
+  // limit defines how many preemption events can occur within the given time window.
   // An event is defined as a confirmed (preemptor, preemptee) eviction pair.
-  // Setting Limit to 0 blocks all preemptions under this limit's scope.
+  // Setting limit to 0 blocks all preemptions under this limit's scope.
   //
-  // +kubebuilder:validation:Required
+  // +required
   // +kubebuilder:validation:Minimum=0
   Limit int32 `json:"limit"`
 
-  // LimitWindowDuration specifies the sliding time window duration.
-  // Must be greater than or equal to 1s to prevent sub-second thrashing.
+  // limitWindowSeconds specifies the sliding time window duration, in seconds.
+  // Must be greater than or equal to 1 to prevent sub-second thrashing.
   //
-  // +kubebuilder:validation:Required
-  // +kubebuilder:validation:XValidation:rule="self >= duration('1s')",message="must be at least 1s"
-  LimitWindowDuration metav1.Duration `json:"limitWindowDuration"`
+  // +required
+  // +kubebuilder:validation:Minimum=1
+  LimitWindowSeconds int32 `json:"limitWindowSeconds,omitempty"`
 }
 
 type PreemptionLimitStatus struct {
-  Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-  // Periodically updated, for reference only.
-  // Map key depends on the scope. For Global it is just Global.
-  // For CQ it is ClusterQueue name.
-  // For Workload it is namespace + "/" + workload name.
+  // counts is periodically updated, for reference only.
   // Restricted to the top 1000 counts to fit within CRD size limits.
-  Count map[string]int32 `json:"count,omitempty"`
+  //
+  // +optional
+  // +listType=map
+  // +listMapKey=name
+  // +kubebuilder:validation:MaxItems=1000
+  Counts []PreemptionLimitCount `json:"counts,omitempty"`
+}
+
+type PreemptionLimitCount struct {
+  // name identifies the scoped entity.
+  // For Global scope it is "Global".
+  // For PreemptingClusterQueue and PreemptedClusterQueue scopes it is the ClusterQueue name.
+  // For PreemptedWorkload scope it is "<namespace>/<workload-name>".
+  //
+  // +required
+  // +kubebuilder:validation:MinLength=1
+  // +kubebuilder:validation:MaxLength=512
+  Name string `json:"name"`
+
+  // count is the number of preemptions recorded within the sliding time window.
+  //
+  // +required
+  // +kubebuilder:validation:Minimum=0
+  Count int32 `json:"count"`
 }
 ```
 
 PreemptionLimit limits the number of preemptions that happen for the specified set of rules. The preemption evaluator evaluates proposed preemptions against defined limit objects, allowing them to proceed only if adequate preemption quota remains. If a preemption is in the scope of multiple limits, quota must exist in all of them.
 To track this, a list of preemption rule names responsible for selecting each candidate must be maintained.
 
-To manage this data, Kueue will store a comprehensive preemption map in memory, isolated per PreemptionLimit. This map tracks all preemption event timestamps under a specific CQ/workload key, capturing events that occurred within the designated `LimitWindowDuration`. Moreover, it tracks only events that are in the scope of the specific limit; if a preemption does not match the defined config or rules selector, it will not be tracked in that particular instance of the preemption map. This list is dynamically trimmed upon each retrieval to filter out expired timestamps.
+To manage this data, Kueue will store a comprehensive preemption map in memory, isolated per PreemptionLimit. This map tracks all preemption event timestamps under a specific CQ/workload key, capturing events that occurred within the designated `LimitWindowSeconds`. Moreover, it tracks only events that are in the scope of the specific limit; if a preemption does not match the defined config or rules selector, it will not be tracked in that particular instance of the preemption map. This list is dynamically trimmed upon each retrieval to filter out expired timestamps.
 
-Furthermore, the status of the PreemptionLimit is refreshed periodically — approximately every minute — to write the aggregated totals into the count map (restricted to the top 1000 counts to fit within CRD size limits).
+Furthermore, the status of the PreemptionLimit is refreshed periodically — approximately every minute — to write the aggregated totals into the counts list (restricted to the top 1000 counts to fit within CRD size limits).
 
 ### Observability When Reaching Preemption Limits
 
@@ -746,13 +769,13 @@ When preemption is throttled or blocked due to an exhausted `PreemptionLimit`:
 
 #### Story 1 - Global Preemption Rate Limiting
 
-Rate-limit global preemptions to at most 10 evictions across the entire cluster in any 5-minute sliding window:
+Rate-limit global preemptions to at most 10 evictions across the entire cluster in any 5-minute (300s) sliding window:
 
 ```yaml
 spec:
   scope: "Global"
   limit: 10
-  limitWindowDuration: "5m"
+  limitWindowSeconds: 300
 ```
 
 #### Story 2 - Protecting a Mission-Critical ClusterQueue from Preemption
@@ -766,7 +789,7 @@ spec:
     matchLabels:
       kueue.x-k8s.io/queue-name: "hero-cq"
   limit: 0
-  limitWindowDuration: "1h"
+  limitWindowSeconds: 3600
 ```
 
 ## Minimum Trigger Duration (MinTriggerRequiredDuration)

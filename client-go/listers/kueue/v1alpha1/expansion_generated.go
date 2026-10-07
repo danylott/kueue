@@ -29,3 +29,7 @@ type DynamicQuotaOrchestratorListerExpansion interface{}
 // PreemptionConfigListerExpansion allows custom methods to be added to
 // PreemptionConfigLister.
 type PreemptionConfigListerExpansion interface{}
+
+// PreemptionLimitListerExpansion allows custom methods to be added to
+// PreemptionLimitLister.
+type PreemptionLimitListerExpansion interface{}
