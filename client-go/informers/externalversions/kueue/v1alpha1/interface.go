@@ -30,6 +30,8 @@ type Interface interface {
 	DynamicQuotaOrchestrators() TypedDynamicQuotaOrchestratorInformer
 	// PreemptionConfigs returns a PreemptionConfigInformer.
 	PreemptionConfigs() TypedPreemptionConfigInformer
+	// PreemptionLimits returns a PreemptionLimitInformer.
+	PreemptionLimits() TypedPreemptionLimitInformer
 }
 
 type version struct {
@@ -56,4 +58,9 @@ func (v *version) DynamicQuotaOrchestrators() TypedDynamicQuotaOrchestratorInfor
 // PreemptionConfigs returns a TypedPreemptionConfigInformer.
 func (v *version) PreemptionConfigs() TypedPreemptionConfigInformer {
 	return &preemptionConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// PreemptionLimits returns a TypedPreemptionLimitInformer.
+func (v *version) PreemptionLimits() TypedPreemptionLimitInformer {
+	return &preemptionLimitInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
