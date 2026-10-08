@@ -55,29 +55,29 @@ type PreemptionLimitList struct {
 
 // PreemptionLimitScope specifies the entity boundary for a preemption limit.
 // Possible values are:
-// - "Global": restricts the total number of preemption events across the entire cluster within a sliding time window.
-// - "PreemptingClusterQueue": throttles preemptions triggered by workloads originating from a specific ClusterQueue.
-// - "PreemptedClusterQueue": limits or blocks preemptions targeting workloads belonging to a specific ClusterQueue.
-// - "PreemptedWorkload": restricts how many times an individual workload can be preempted within a given time window.
+// - "Global": restricts the total number of preemption events across the entire cluster within the sliding time window.
+// - "PreemptingClusterQueue": restricts the number of preemption events triggered by workloads originating from a specific ClusterQueue within the sliding time window.
+// - "PreemptedClusterQueue": restricts the number of preemption events targeting workloads belonging to a specific ClusterQueue within the sliding time window.
+// - "PreemptedWorkload": restricts how many times an individual workload can be preempted within the sliding time window.
 //
 // +kubebuilder:validation:Enum=Global;PreemptingClusterQueue;PreemptedClusterQueue;PreemptedWorkload
 type PreemptionLimitScope string
 
 const (
 	// GlobalPreemptionLimitScope restricts the total number of preemption events
-	// across the entire cluster within a sliding time window.
+	// across the entire cluster within the sliding time window.
 	GlobalPreemptionLimitScope PreemptionLimitScope = "Global"
 
-	// PreemptingCQLimitScope throttles preemptions triggered by workloads
-	// originating from a specific ClusterQueue.
+	// PreemptingCQLimitScope restricts the number of preemption events triggered by workloads
+	// originating from a specific ClusterQueue within the sliding time window.
 	PreemptingCQLimitScope PreemptionLimitScope = "PreemptingClusterQueue"
 
-	// PreemptedCQLimitScope limits or blocks preemptions targeting workloads
-	// belonging to a specific ClusterQueue.
+	// PreemptedCQLimitScope restricts the number of preemption events targeting workloads
+	// belonging to a specific ClusterQueue within the sliding time window.
 	PreemptedCQLimitScope PreemptionLimitScope = "PreemptedClusterQueue"
 
 	// PreemptedWorkloadLimitScope restricts how many times an individual workload
-	// can be preempted within a given time window.
+	// can be preempted within the sliding time window.
 	PreemptedWorkloadLimitScope PreemptionLimitScope = "PreemptedWorkload"
 )
 
@@ -133,8 +133,7 @@ type PreemptionLimitStatus struct {
 	// Restricted to the top 1000 counts to fit within CRD size limits.
 	//
 	// +optional
-	// +listType=map
-	// +listMapKey=name
+	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=1000
 	Counts []PreemptionLimitCount `json:"counts,omitempty"`
 }
@@ -148,12 +147,12 @@ type PreemptionLimitCount struct {
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:MaxLength=317
 	Name string `json:"name"`
 
-	// count is the number of preemptions recorded within the sliding time window.
+	// value is the number of preemptions recorded within the sliding time window.
 	//
 	// +required
 	// +kubebuilder:validation:Minimum=0
-	Count int32 `json:"count"`
+	Value int32 `json:"value"`
 }

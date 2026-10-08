@@ -189,30 +189,28 @@ spec:
                   description: PreemptionLimitCount tracks the number of preemptions
                     for a single scoped entity.
                   properties:
-                    count:
-                      description: count is the number of preemptions recorded within
-                        the sliding time window.
-                      format: int32
-                      minimum: 0
-                      type: integer
                     name:
                       description: |-
                         name identifies the scoped entity.
                         For Global scope it is "Global".
                         For PreemptingClusterQueue and PreemptedClusterQueue scopes it is the ClusterQueue name.
                         For PreemptedWorkload scope it is "<namespace>/<workload-name>".
-                      maxLength: 512
+                      maxLength: 317
                       minLength: 1
                       type: string
+                    value:
+                      description: value is the number of preemptions recorded within
+                        the sliding time window.
+                      format: int32
+                      minimum: 0
+                      type: integer
                   required:
-                  - count
                   - name
+                  - value
                   type: object
                 maxItems: 1000
                 type: array
-                x-kubernetes-list-map-keys:
-                - name
-                x-kubernetes-list-type: map
+                x-kubernetes-list-type: atomic
             type: object
         type: object
     served: true

@@ -29,9 +29,9 @@ type PreemptionLimitCountApplyConfiguration struct {
 	// For PreemptedWorkload scope it is "<namespace>/<workload-name>".
 	//
 	Name *string `json:"name,omitempty"`
-	// count is the number of preemptions recorded within the sliding time window.
+	// value is the number of preemptions recorded within the sliding time window.
 	//
-	Count *int32 `json:"count,omitempty"`
+	Value *int32 `json:"value,omitempty"`
 }
 
 // PreemptionLimitCountApplyConfiguration constructs a declarative configuration of the PreemptionLimitCount type for use with
@@ -48,10 +48,10 @@ func (b *PreemptionLimitCountApplyConfiguration) WithName(value string) *Preempt
 	return b
 }
 
-// WithCount sets the Count field in the declarative configuration to the given value
+// WithValue sets the Value field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Count field is set to the value of the last call.
-func (b *PreemptionLimitCountApplyConfiguration) WithCount(value int32) *PreemptionLimitCountApplyConfiguration {
-	b.Count = &value
+// If called multiple times, the Value field is set to the value of the last call.
+func (b *PreemptionLimitCountApplyConfiguration) WithValue(value int32) *PreemptionLimitCountApplyConfiguration {
+	b.Value = &value
 	return b
 }

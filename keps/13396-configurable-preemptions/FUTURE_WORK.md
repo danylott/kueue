@@ -725,8 +725,7 @@ type PreemptionLimitStatus struct {
   // Restricted to the top 1000 counts to fit within CRD size limits.
   //
   // +optional
-  // +listType=map
-  // +listMapKey=name
+  // +listType=atomic
   // +kubebuilder:validation:MaxItems=1000
   Counts []PreemptionLimitCount `json:"counts,omitempty"`
 }
@@ -739,14 +738,14 @@ type PreemptionLimitCount struct {
   //
   // +required
   // +kubebuilder:validation:MinLength=1
-  // +kubebuilder:validation:MaxLength=512
+  // +kubebuilder:validation:MaxLength=317
   Name string `json:"name"`
 
-  // count is the number of preemptions recorded within the sliding time window.
+  // value is the number of preemptions recorded within the sliding time window.
   //
   // +required
   // +kubebuilder:validation:Minimum=0
-  Count int32 `json:"count"`
+  Value int32 `json:"value"`
 }
 ```
 
