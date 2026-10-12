@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-func TestConsumedLimits(t *testing.T) {
+func TestResolve(t *testing.T) {
 	preemptor := &workload.Info{
 		Obj:          utiltestingapi.MakeWorkload("preemptor", "ns").Obj(),
 		ClusterQueue: "preempting-cq",
@@ -44,9 +44,15 @@ func TestConsumedLimits(t *testing.T) {
 
 	cases := map[string]struct {
 		preemptionLimits []kueuealpha.PreemptionLimit
-		want             map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue
+		want             policy.ConsumedLimits
 	}{
 		"no limits": {},
+		"single limit resolves its scope value": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{
+				*utiltestingalpha.MakePreemptionLimit("preempted-workload", kueuealpha.PreemptedWorkloadLimitScope).Obj(),
+			},
+			want: policy.ConsumedLimits{"preempted-workload": "ns/target"},
+		},
 		"each scope resolves its scope value": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{
 				*utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).Obj(),
@@ -54,7 +60,7 @@ func TestConsumedLimits(t *testing.T) {
 				*utiltestingalpha.MakePreemptionLimit("preempted-cq", kueuealpha.PreemptedCQLimitScope).Obj(),
 				*utiltestingalpha.MakePreemptionLimit("preempted-workload", kueuealpha.PreemptedWorkloadLimitScope).Obj(),
 			},
-			want: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{
+			want: policy.ConsumedLimits{
 				"global":             "Global",
 				"preempting-cq":      "preempting-cq",
 				"preempted-cq":       "preempted-cq",
@@ -64,7 +70,7 @@ func TestConsumedLimits(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := ConsumedLimits(tc.preemptionLimits, preemptor, target)
+			got := Resolve(tc.preemptionLimits, preemptor, target)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("Unexpected consumed limits (-want,+got):\n%s", diff)
 			}
@@ -77,57 +83,67 @@ func TestPreemptionLimitTrackerRecord(t *testing.T) {
 	t2 := t1.Add(time.Second)
 	t3 := t2.Add(time.Second)
 
-	type record struct {
-		ts       time.Time
-		consumed map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue
-	}
 	cases := map[string]struct {
-		records []record
-		want    map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
+		events   map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
+		ts       time.Time
+		consumed policy.ConsumedLimits
+		want     map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
 	}{
 		"nil consumed limits is a no-op": {
-			records: []record{{ts: t1}},
-		},
-		"multiple limits and scope values": {
-			records: []record{
-				{ts: t1, consumed: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{
-					"global":       "Global",
-					"per-cq":       "cq-a",
-					"per-workload": "ns/wl-1",
-				}},
-				{ts: t2, consumed: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{
-					"global":       "Global",
-					"per-cq":       "cq-b",
-					"per-workload": "ns/wl-2",
-				}},
-				{ts: t3, consumed: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{
-					"per-cq": "cq-a",
-				}},
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"global": {"Global": {t1}},
 			},
+			ts: t2,
 			want: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
-				"global":       {"Global": {t1, t2}},
-				"per-cq":       {"cq-a": {t1, t3}, "cq-b": {t2}},
-				"per-workload": {"ns/wl-1": {t1}, "ns/wl-2": {t2}},
+				"global": {"Global": {t1}},
 			},
 		},
-		"out-of-order inserts are kept sorted": {
-			records: []record{
-				{ts: t3, consumed: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{"global": "Global"}},
-				{ts: t1, consumed: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{"global": "Global"}},
-				{ts: t2, consumed: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{"global": "Global"}},
-				{ts: t1, consumed: map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{"global": "Global"}},
-			},
+		"every consumed limit is recorded": {
+			ts:       t1,
+			consumed: policy.ConsumedLimits{"global": "Global", "per-cq": "cq-a"},
 			want: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
-				"global": {"Global": {t1, t1, t2, t3}},
+				"global": {"Global": {t1}},
+				"per-cq": {"cq-a": {t1}},
+			},
+		},
+		"new scope value of a recorded limit": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {t1}},
+			},
+			ts:       t2,
+			consumed: policy.ConsumedLimits{"per-cq": "cq-b"},
+			want: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {t1}, "cq-b": {t2}},
+			},
+		},
+		"later event is appended": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"global": {"Global": {t1, t2}},
+			},
+			ts:       t3,
+			consumed: policy.ConsumedLimits{"global": "Global"},
+			want: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"global": {"Global": {t1, t2, t3}},
+			},
+		},
+		"earlier event is inserted in order": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"global": {"Global": {t1, t3}},
+			},
+			ts:       t2,
+			consumed: policy.ConsumedLimits{"global": "Global"},
+			want: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"global": {"Global": {t1, t2, t3}},
 			},
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			tracker := NewPreemptionLimitTracker()
-			for _, r := range tc.records {
-				tracker.Record(r.ts, r.consumed)
+			if tc.events != nil {
+				tracker.events = tc.events
 			}
+			tracker.Record(tc.ts, tc.consumed)
 			if diff := cmp.Diff(tc.want, tracker.events, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("Unexpected events (-want,+got):\n%s", diff)
 			}
@@ -136,22 +152,24 @@ func TestPreemptionLimitTrackerRecord(t *testing.T) {
 }
 
 func TestPreemptionLimitTrackerRecordConcurrent(t *testing.T) {
-	const records = 100
+	const goroutines, recordsPerGoroutine = 10, 100
 	start := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	consumed := map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{"global": "Global"}
+	consumed := policy.ConsumedLimits{"global": "Global"}
 
 	tracker := NewPreemptionLimitTracker()
 	var wg sync.WaitGroup
-	for i := range records {
+	for g := range goroutines {
 		wg.Go(func() {
-			tracker.Record(start.Add(time.Duration(i)*time.Second), consumed)
+			for i := range recordsPerGoroutine {
+				tracker.Record(start.Add(time.Duration(g*recordsPerGoroutine+i)*time.Second), consumed)
+			}
 		})
 	}
 	wg.Wait()
 
 	got := tracker.events["global"]["Global"]
-	if len(got) != records {
-		t.Errorf("Recorded %d events, want %d", len(got), records)
+	if len(got) != goroutines*recordsPerGoroutine {
+		t.Errorf("Recorded %d events, want %d", len(got), goroutines*recordsPerGoroutine)
 	}
 	if !slices.IsSortedFunc(got, time.Time.Compare) {
 		t.Errorf("Events are not sorted: %v", got)

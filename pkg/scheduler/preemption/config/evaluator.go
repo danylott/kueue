@@ -196,7 +196,7 @@ func (p *PreemptionEvaluator) iterateOverCandidates(
 			ConfigurablePreemptionReasonData: &policy.ConfigurablePreemptionReasonData{
 				ConfigName:                candidate.ConfigName,
 				RuleNameToSelectorIndexes: candidate.RuleNameToSelectorIndexes,
-				ConsumedLimits:            limits.ConsumedLimits(p.preemptionLimits, p.preemptor, candidate.WlInfo),
+				ConsumedLimits:            limits.Resolve(p.preemptionLimits, p.preemptor, candidate.WlInfo),
 			},
 		}) {
 			return true

@@ -1000,23 +1000,23 @@ func TestNewEvaluatorForPreemptionConfigConsumedLimits(t *testing.T) {
 	cases := map[string]struct {
 		enableLimits bool
 		listErr      error
-		want         map[string]map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue
+		want         map[string]policy.ConsumedLimits
 	}{
 		"limits are not consumed when the ConfigurablePreemptionLimits feature is disabled": {
-			want: map[string]map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{
+			want: map[string]policy.ConsumedLimits{
 				"/a1": nil,
 			},
 		},
-		"every limit is consumed when the ConfigurablePreemptionLimits feature is enabled": {
+		"limits with different scopes are consumed when the ConfigurablePreemptionLimits feature is enabled": {
 			enableLimits: true,
-			want: map[string]map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{
+			want: map[string]policy.ConsumedLimits{
 				"/a1": {"global": "Global", "per-preempted-cq": "a"},
 			},
 		},
 		"no candidates are yielded when the PreemptionLimits cannot be listed": {
 			enableLimits: true,
 			listErr:      errors.New("simulated List error"),
-			want:         map[string]map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{},
+			want:         map[string]policy.ConsumedLimits{},
 		},
 	}
 	for name, tc := range cases {
@@ -1028,11 +1028,11 @@ func TestNewEvaluatorForPreemptionConfigConsumedLimits(t *testing.T) {
 			ctx, log := utiltesting.ContextWithLog(t)
 			cl := utiltesting.NewClientBuilder().
 				WithObjects(
-					preemptionConfig.DeepCopy(),
+					preemptionConfig,
 					utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).Obj(),
 					utiltestingalpha.MakePreemptionLimit("per-preempted-cq", kueuealpha.PreemptedCQLimitScope).Obj(),
 				).
-				WithLists(&kueue.WorkloadList{Items: []kueue.Workload{*admitted.DeepCopy()}}).
+				WithLists(&kueue.WorkloadList{Items: []kueue.Workload{*admitted}}).
 				WithInterceptorFuncs(interceptor.Funcs{
 					List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 						if _, ok := list.(*kueuealpha.PreemptionLimitList); ok && tc.listErr != nil {
@@ -1044,7 +1044,7 @@ func TestNewEvaluatorForPreemptionConfigConsumedLimits(t *testing.T) {
 				Build()
 			cqCache := schdcache.New(cl)
 			cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
-			if err := cqCache.AddClusterQueue(ctx, clusterQueue.DeepCopy()); err != nil {
+			if err := cqCache.AddClusterQueue(ctx, clusterQueue); err != nil {
 				t.Fatalf("Couldn't add ClusterQueue to cache: %v", err)
 			}
 			snapshot, err := cqCache.Snapshot(ctx)
@@ -1055,7 +1055,7 @@ func TestNewEvaluatorForPreemptionConfigConsumedLimits(t *testing.T) {
 			preemptor.ClusterQueue = "a"
 			evaluator := NewEvaluatorForPreemptionConfig(ctx, log, cl, preemptionConfig.Name, preemptor, candidatesByName)
 
-			got := map[string]map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{}
+			got := map[string]policy.ConsumedLimits{}
 			evaluator.FindCandidates(snapshot, sets.New(fr), func() bool { return false }, func(target *policy.Target) bool {
 				got[string(workload.Key(target.WorkloadInfo.Obj))] = target.ConfigurablePreemptionReasonData.ConsumedLimits
 				return true

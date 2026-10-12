@@ -26,13 +26,13 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// ConsumedLimits returns, for each PreemptionLimit, the scope value consumed by
+// Resolve returns, for each PreemptionLimit, the scope value consumed by
 // preempting target to admit preemptor.
-func ConsumedLimits(preemptionLimits []kueuealpha.PreemptionLimit, preemptor, target *workload.Info) map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue {
+func Resolve(preemptionLimits []kueuealpha.PreemptionLimit, preemptor, target *workload.Info) policy.ConsumedLimits {
 	if len(preemptionLimits) == 0 {
 		return nil
 	}
-	consumed := make(map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue, len(preemptionLimits))
+	consumed := make(policy.ConsumedLimits, len(preemptionLimits))
 	for i := range preemptionLimits {
 		limit := &preemptionLimits[i]
 		consumed[policy.PreemptionLimitReference(limit.Name)] = scopeValue(limit.Spec.Scope, preemptor, target)
@@ -83,7 +83,7 @@ func NewPreemptionLimitTracker() *PreemptionLimitTracker {
 
 // Record records a preemption at ts for every PreemptionLimit and scope value
 // pair in consumedLimits.
-func (t *PreemptionLimitTracker) Record(ts time.Time, consumedLimits map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue) {
+func (t *PreemptionLimitTracker) Record(ts time.Time, consumedLimits policy.ConsumedLimits) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for limit, scopeValue := range consumedLimits {
