@@ -391,13 +391,19 @@ func MakePreemptionLimit(name string, scope kueuealpha.PreemptionLimitScope) *Pr
 	}
 }
 
-// LimitWindowSeconds sets the sliding window duration of the PreemptionLimit.
-func (pl *PreemptionLimitWrapper) LimitWindowSeconds(seconds int32) *PreemptionLimitWrapper {
-	pl.Spec.LimitWindowSeconds = seconds
-	return pl
-}
-
 // Obj returns the inner PreemptionLimit.
 func (pl *PreemptionLimitWrapper) Obj() *kueuealpha.PreemptionLimit {
 	return &pl.PreemptionLimit
+}
+
+// Limit sets the number of preemptions allowed within the window.
+func (pl *PreemptionLimitWrapper) Limit(limit int32) *PreemptionLimitWrapper {
+	pl.Spec.Limit = limit
+	return pl
+}
+
+// LimitWindowSeconds sets the sliding window duration, in seconds.
+func (pl *PreemptionLimitWrapper) LimitWindowSeconds(seconds int32) *PreemptionLimitWrapper {
+	pl.Spec.LimitWindowSeconds = seconds
+	return pl
 }

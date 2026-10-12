@@ -26,13 +26,13 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// ConsumedLimits returns, for each PreemptionLimit, the scope value consumed by
+// Resolve returns, for each PreemptionLimit, the scope value consumed by
 // preempting target to admit preemptor.
-func ConsumedLimits(preemptionLimits []kueuealpha.PreemptionLimit, preemptor, target *workload.Info) map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue {
+func Resolve(preemptionLimits []kueuealpha.PreemptionLimit, preemptor, target *workload.Info) policy.ConsumedLimits {
 	if len(preemptionLimits) == 0 {
 		return nil
 	}
-	consumed := make(map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue, len(preemptionLimits))
+	consumed := make(policy.ConsumedLimits, len(preemptionLimits))
 	for i := range preemptionLimits {
 		limit := &preemptionLimits[i]
 		consumed[policy.PreemptionLimitReference(limit.Name)] = scopeValue(limit.Spec.Scope, preemptor, target)
@@ -58,11 +58,6 @@ func scopeValue(scope kueuealpha.PreemptionLimitScope, preemptor, target *worklo
 // "now" lags slightly behind still find every event they count.
 const pruneGracePeriod = time.Minute
 
-// window returns the sliding window of limit.
-func window(limit *kueuealpha.PreemptionLimit) time.Duration {
-	return time.Duration(limit.Spec.LimitWindowSeconds) * time.Second
-}
-
 // events holds preemption timestamps in ascending order.
 type events []time.Time
 
@@ -85,8 +80,7 @@ func (e events) pruneBefore(cutoff time.Time) events {
 }
 
 // PreemptionLimitTracker records the timestamps of confirmed configurable preemptions for
-// each PreemptionLimit and scope value. Expired events are dropped with Prune, and the
-// events of deleted PreemptionLimits with Forget. It is safe for concurrent use.
+// each PreemptionLimit and scope value. It is safe for concurrent use.
 type PreemptionLimitTracker struct {
 	mu     sync.RWMutex
 	events map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
@@ -101,7 +95,7 @@ func NewPreemptionLimitTracker() *PreemptionLimitTracker {
 
 // Record records a preemption at ts for every PreemptionLimit and scope value
 // pair in consumedLimits.
-func (t *PreemptionLimitTracker) Record(ts time.Time, consumedLimits map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue) {
+func (t *PreemptionLimitTracker) Record(ts time.Time, consumedLimits policy.ConsumedLimits) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for limit, scopeValue := range consumedLimits {
@@ -118,7 +112,8 @@ func (t *PreemptionLimitTracker) Record(ts time.Time, consumedLimits map[policy.
 // pruneGracePeriod, and forgets the scope values (and the limit) left without events.
 func (t *PreemptionLimitTracker) Prune(now time.Time, limit *kueuealpha.PreemptionLimit) {
 	ref := policy.PreemptionLimitReference(limit.Name)
-	cutoff := now.Add(-window(limit) - pruneGracePeriod)
+	window := time.Duration(limit.Spec.LimitWindowSeconds) * time.Second
+	cutoff := now.Add(-window - pruneGracePeriod)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	scopes := t.events[ref]

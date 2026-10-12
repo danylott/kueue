@@ -4825,7 +4825,7 @@ func TestIssuePreemptionsRecordsPreemptionLimits(t *testing.T) {
 				Obj(),
 			now,
 		)
-	consumedLimits := map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue{
+	consumedLimits := policy.ConsumedLimits{
 		"global":                 "Global",
 		"per-preempted-workload": "default/victim",
 	}
@@ -4842,7 +4842,7 @@ func TestIssuePreemptionsRecordsPreemptionLimits(t *testing.T) {
 		reasonData    *policy.ConfigurablePreemptionReasonData
 		evictionErr   error
 		issueTwice    bool
-		wantRecorded  map[policy.PreemptionLimitReference]policy.PreemptionLimitScopeValue
+		wantRecorded  policy.ConsumedLimits
 	}{
 		"configurable preemption is recorded": {
 			victim:       victim.Clone().Obj(),
@@ -4901,8 +4901,8 @@ func TestIssuePreemptionsRecordsPreemptionLimits(t *testing.T) {
 				Build()
 
 			cqCache := schdcache.New(cl)
-			cqCache.AddOrUpdateResourceFlavor(log, rf.DeepCopy())
-			if err := cqCache.AddClusterQueue(ctx, cq.DeepCopy()); err != nil {
+			cqCache.AddOrUpdateResourceFlavor(log, rf)
+			if err := cqCache.AddClusterQueue(ctx, cq); err != nil {
 				t.Fatalf("Couldn't add ClusterQueue to cache: %v", err)
 			}
 			snapshot, err := cqCache.Snapshot(ctx)
