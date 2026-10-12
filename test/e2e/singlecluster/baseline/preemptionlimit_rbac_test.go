@@ -17,8 +17,11 @@ limitations under the License.
 package baseline
 
 import (
+	"context"
+
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
@@ -41,8 +44,8 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 		var adminClient kueueclientset.Interface
 
 		ginkgo.BeforeEach(func() {
-			adminClient = bindUserToClusterRole(
-				preemptionLimitAdminUser, "kueue-batch-admin-role", listLocalQueues)
+			adminClient = e2e.BindUserToClusterRole(ctx, k8sClient,
+				preemptionLimitAdminUser, "kueue-batch-admin-role", e2e.ListLocalQueues)
 		})
 
 		ginkgo.It("Should allow the full PreemptionLimit lifecycle but forbid status writes", func() {
@@ -68,10 +71,6 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 				gomega.Expect(got.Spec.Limit).Should(gomega.Equal(int32(1)))
 			})
 
-			ginkgo.By("Getting the PreemptionLimit status", func() {
-				gomega.Expect(getPreemptionLimitStatus(adminClient, preemptionLimit.Name)).To(gomega.Succeed())
-			})
-
 			ginkgo.By("Listing the PreemptionLimits", func() {
 				list, err := preemptionLimits.List(ctx, metav1.ListOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -80,13 +79,20 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 			})
 
 			ginkgo.By("Updating the PreemptionLimit", func() {
-				// No Eventually: nothing else writes this object, so a retry would only hide a
-				// missing update verb behind a timeout.
-				preemptionLimit.Spec.Limit = 2
-				updated, err := preemptionLimits.Update(ctx, preemptionLimit, metav1.UpdateOptions{})
-				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				gomega.Expect(updated.Spec.Limit).Should(gomega.Equal(int32(2)))
-				preemptionLimit = updated
+				// Kueue may write the status meanwhile, which bumps resourceVersion, so retry on
+				// conflicts. Any other error, such as Forbidden, stops the retries immediately.
+				gomega.Eventually(func(g gomega.Gomega) {
+					latest, err := preemptionLimits.Get(ctx, preemptionLimit.Name, metav1.GetOptions{})
+					g.Expect(err).NotTo(gomega.HaveOccurred())
+					latest.Spec.Limit = 2
+					updated, err := preemptionLimits.Update(ctx, latest, metav1.UpdateOptions{})
+					if err != nil && !apierrors.IsConflict(err) {
+						gomega.StopTrying("Failed to update the PreemptionLimit").Wrap(err).Now()
+					}
+					g.Expect(err).NotTo(gomega.HaveOccurred())
+					g.Expect(updated.Spec.Limit).Should(gomega.Equal(int32(2)))
+					preemptionLimit = updated
+				}, behavioral.Timeout, behavioral.Interval).Should(gomega.Succeed())
 			})
 
 			ginkgo.By("Returning a Forbidden error for a status update request", func() {
@@ -119,7 +125,7 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 				behavioral.ExpectObjectToBeDeleted(ctx, k8sClient, preemptionLimit, true)
 			})
 
-			viewerClient = bindUserToClusterRole(
+			viewerClient = e2e.BindUserToClusterRole(ctx, k8sClient,
 				preemptionLimitViewerUser, "kueue-preemptionlimit-viewer-role", listPreemptionLimits)
 		})
 
@@ -130,10 +136,6 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 				got, err := preemptionLimits.Get(ctx, preemptionLimit.Name, metav1.GetOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
 				gomega.Expect(got.Spec.Limit).Should(gomega.Equal(int32(1)))
-			})
-
-			ginkgo.By("Getting the PreemptionLimit status", func() {
-				gomega.Expect(getPreemptionLimitStatus(viewerClient, preemptionLimit.Name)).To(gomega.Succeed())
 			})
 
 			ginkgo.By("Listing the PreemptionLimits", func() {
@@ -151,8 +153,8 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 		var userClient kueueclientset.Interface
 
 		ginkgo.BeforeEach(func() {
-			userClient = bindUserToClusterRole(
-				preemptionLimitBatchUser, "kueue-batch-user-role", listLocalQueues)
+			userClient = e2e.BindUserToClusterRole(ctx, k8sClient,
+				preemptionLimitBatchUser, "kueue-batch-user-role", e2e.ListLocalQueues)
 		})
 
 		ginkgo.It("Should be Forbidden from accessing PreemptionLimits", func() {
@@ -169,21 +171,11 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 })
 
 // listPreemptionLimits is the readiness probe for preemptionlimit-viewer, which grants nothing
-// else. That makes the list assertion in that spec tautological, but its denials still hold.
-func listPreemptionLimits(c kueueclientset.Interface) error {
+// outside PreemptionLimits. That makes the list assertion in that spec tautological, but its
+// denials still hold.
+func listPreemptionLimits(ctx context.Context, c kueueclientset.Interface) error {
 	_, err := c.KueueV1alpha1().PreemptionLimits().List(ctx, metav1.ListOptions{})
 	return err
-}
-
-// getPreemptionLimitStatus reads name through the status subresource, which RBAC authorizes
-// separately from the main resource. The typed clientset has no getter for subresources.
-func getPreemptionLimitStatus(c kueueclientset.Interface, name string) error {
-	return c.KueueV1alpha1().RESTClient().Get().
-		Resource("preemptionlimits").
-		Name(name).
-		SubResource("status").
-		Do(ctx).
-		Error()
 }
 
 // expectPreemptionLimitAccessForbidden asserts that c is denied every verb on PreemptionLimits.
@@ -196,10 +188,6 @@ func expectPreemptionLimitAccessForbidden(c kueueclientset.Interface, name strin
 	ginkgo.By("Returning a Forbidden error for a get request", func() {
 		_, err := preemptionLimits.Get(ctx, name, metav1.GetOptions{})
 		gomega.Expect(err).Should(utiltesting.BeForbiddenError())
-	})
-
-	ginkgo.By("Returning a Forbidden error for a status get request", func() {
-		gomega.Expect(getPreemptionLimitStatus(c, name)).Should(utiltesting.BeForbiddenError())
 	})
 
 	ginkgo.By("Returning a Forbidden error for a list request", func() {

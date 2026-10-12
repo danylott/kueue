@@ -17,6 +17,8 @@ limitations under the License.
 package baseline
 
 import (
+	"context"
+
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,8 +43,8 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 		var adminClient kueueclientset.Interface
 
 		ginkgo.BeforeEach(func() {
-			adminClient = bindUserToClusterRole(
-				preemptionConfigAdminUser, "kueue-batch-admin-role", listLocalQueues)
+			adminClient = e2e.BindUserToClusterRole(ctx, k8sClient,
+				preemptionConfigAdminUser, "kueue-batch-admin-role", e2e.ListLocalQueues)
 		})
 
 		ginkgo.It("Should allow the full PreemptionConfig lifecycle", func() {
@@ -109,7 +111,7 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 				behavioral.ExpectObjectToBeDeleted(ctx, k8sClient, preemptionConfig, true)
 			})
 
-			viewerClient = bindUserToClusterRole(
+			viewerClient = e2e.BindUserToClusterRole(ctx, k8sClient,
 				preemptionConfigViewerUser, "kueue-preemptionconfig-viewer-role", listPreemptionConfigs)
 		})
 
@@ -137,8 +139,8 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 		var userClient kueueclientset.Interface
 
 		ginkgo.BeforeEach(func() {
-			userClient = bindUserToClusterRole(
-				preemptionConfigBatchUser, "kueue-batch-user-role", listLocalQueues)
+			userClient = e2e.BindUserToClusterRole(ctx, k8sClient,
+				preemptionConfigBatchUser, "kueue-batch-user-role", e2e.ListLocalQueues)
 		})
 
 		ginkgo.It("Should be Forbidden from accessing PreemptionConfigs", func() {
@@ -156,7 +158,7 @@ var _ = ginkgo.Describe("PreemptionConfig RBAC", ginkgo.Label("area:singlecluste
 
 // listPreemptionConfigs is the readiness probe for preemptionconfig-viewer, which grants nothing
 // else. That makes the list assertion in that spec tautological, but its denials still hold.
-func listPreemptionConfigs(c kueueclientset.Interface) error {
+func listPreemptionConfigs(ctx context.Context, c kueueclientset.Interface) error {
 	_, err := c.KueueV1alpha1().PreemptionConfigs().List(ctx, metav1.ListOptions{})
 	return err
 }
