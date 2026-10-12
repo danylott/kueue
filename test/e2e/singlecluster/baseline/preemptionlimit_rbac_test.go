@@ -71,6 +71,10 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 				gomega.Expect(got.Spec.Limit).Should(gomega.Equal(int32(1)))
 			})
 
+			ginkgo.By("Getting the PreemptionLimit status", func() {
+				gomega.Expect(getPreemptionLimitStatus(adminClient, preemptionLimit.Name)).To(gomega.Succeed())
+			})
+
 			ginkgo.By("Listing the PreemptionLimits", func() {
 				list, err := preemptionLimits.List(ctx, metav1.ListOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -138,6 +142,10 @@ var _ = ginkgo.Describe("PreemptionLimit RBAC", ginkgo.Label("area:singlecluster
 				gomega.Expect(got.Spec.Limit).Should(gomega.Equal(int32(1)))
 			})
 
+			ginkgo.By("Getting the PreemptionLimit status", func() {
+				gomega.Expect(getPreemptionLimitStatus(viewerClient, preemptionLimit.Name)).To(gomega.Succeed())
+			})
+
 			ginkgo.By("Listing the PreemptionLimits", func() {
 				list, err := preemptionLimits.List(ctx, metav1.ListOptions{})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -178,6 +186,17 @@ func listPreemptionLimits(ctx context.Context, c kueueclientset.Interface) error
 	return err
 }
 
+// getPreemptionLimitStatus reads name through the status subresource, which RBAC authorizes
+// separately from the main resource. The typed clientset has no getter for subresources.
+func getPreemptionLimitStatus(c kueueclientset.Interface, name string) error {
+	return c.KueueV1alpha1().RESTClient().Get().
+		Resource("preemptionlimits").
+		Name(name).
+		SubResource("status").
+		Do(ctx).
+		Error()
+}
+
 // expectPreemptionLimitAccessForbidden asserts that c is denied every verb on PreemptionLimits.
 // RBAC is checked before the object is looked up, so name does not need to exist.
 func expectPreemptionLimitAccessForbidden(c kueueclientset.Interface, name string) {
@@ -188,6 +207,10 @@ func expectPreemptionLimitAccessForbidden(c kueueclientset.Interface, name strin
 	ginkgo.By("Returning a Forbidden error for a get request", func() {
 		_, err := preemptionLimits.Get(ctx, name, metav1.GetOptions{})
 		gomega.Expect(err).Should(utiltesting.BeForbiddenError())
+	})
+
+	ginkgo.By("Returning a Forbidden error for a status get request", func() {
+		gomega.Expect(getPreemptionLimitStatus(c, name)).Should(utiltesting.BeForbiddenError())
 	})
 
 	ginkgo.By("Returning a Forbidden error for a list request", func() {
