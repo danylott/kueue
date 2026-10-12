@@ -155,7 +155,9 @@ func New(
 		roleTracker:            tracker,
 		customLabels:           customLabels,
 		preemptionExpectations: preemptionExpectations,
-		preemptionLimitTracker: limits.NewPreemptionLimitTracker(),
+	}
+	if features.Enabled(features.ConfigurablePreemptionLimits) {
+		p.preemptionLimitTracker = limits.NewPreemptionLimitTracker()
 	}
 	return p
 }
@@ -213,7 +215,7 @@ func (p *Preemptor) buildContext(
 			},
 			TAS: wl.TASUsage(),
 		},
-		configurableEvaluator: p.newConfigurableEvaluator(ctx, log, cq),
+		configurableEvaluator: p.newConfigurableEvaluator(ctx, log, cq, &wl),
 	}
 }
 
@@ -221,11 +223,11 @@ func (p *Preemptor) buildContext(
 // PreemptionConfig must not be re-read for each of them.
 // Returns nil if the ConfigurablePreemptions feature is disabled, or the ClusterQueue
 // references no PreemptionConfig.
-func (p *Preemptor) newConfigurableEvaluator(ctx context.Context, log logr.Logger, cq *schdcache.ClusterQueueSnapshot) *configurable.PreemptionEvaluator {
+func (p *Preemptor) newConfigurableEvaluator(ctx context.Context, log logr.Logger, cq *schdcache.ClusterQueueSnapshot, preemptor *workload.Info) *configurable.PreemptionEvaluator {
 	if !features.Enabled(features.ConfigurablePreemptions) || cq == nil || cq.PreemptionConfigName == nil {
 		return nil
 	}
-	return configurable.NewEvaluatorForPreemptionConfig(ctx, log, p.clock, p.client, *cq.PreemptionConfigName, p.candidatesOrdering(log, cq.Name))
+	return configurable.NewEvaluatorForPreemptionConfig(ctx, log, p.client, *cq.PreemptionConfigName, preemptor, p.candidatesOrdering(log, cq.Name))
 }
 
 // candidatesOrdering returns the order in which the preemption candidates are
