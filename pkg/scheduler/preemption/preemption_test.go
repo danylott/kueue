@@ -4937,8 +4937,8 @@ func TestIssuePreemptionsRecordsPreemptionLimits(t *testing.T) {
 				}
 			}
 
-			// Outside the limits package a tracker can only be built through Record,
-			// which the limits package tests cover.
+			// The PreemptionLimitTracker exposes no read API yet, so the expected
+			// tracker is built with Record, which the limits package tests cover.
 			var wantTracker *limits.PreemptionLimitTracker
 			if !tc.disableLimits {
 				wantTracker = limits.NewPreemptionLimitTracker()
