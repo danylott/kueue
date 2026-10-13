@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/metrics"
 	"sigs.k8s.io/kueue/pkg/resources"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/fairsharing"
+	"sigs.k8s.io/kueue/pkg/scheduler/preemption/limits"
 	"sigs.k8s.io/kueue/pkg/util/expectations"
 	"sigs.k8s.io/kueue/pkg/util/roletracker"
 	"sigs.k8s.io/kueue/pkg/util/waitforpodsready"
@@ -47,6 +48,7 @@ const (
 type SetupControllersOpts struct {
 	RoleTracker               *roletracker.RoleTracker
 	PreemptionExpectations    *expectations.Store
+	PreemptionLimitTracker    *limits.PreemptionLimitTracker
 	CustomLabels              *metrics.CustomLabels
 	DRAMapper                 *dra.ResourceMapper
 	DRABackedResources        *dra.ExtendedResourceCache
@@ -143,6 +145,13 @@ func SetupControllers(mgr ctrl.Manager, qManager *qcache.Manager, cc *schdcache.
 		dqoRec := dqo.NewReconciler(mgr.GetClient(), dqo.WithRoleTracker(opts.RoleTracker))
 		if err := dqoRec.SetupWithManager(mgr); err != nil {
 			return "DynamicQuotaOrchestrator", err
+		}
+	}
+
+	if features.Enabled(features.ConfigurablePreemptionLimits) {
+		plRec := NewPreemptionLimitReconciler(mgr.GetClient(), opts.PreemptionLimitTracker, opts.RoleTracker)
+		if err := plRec.SetupWithManager(mgr); err != nil {
+			return "PreemptionLimit", err
 		}
 	}
 
