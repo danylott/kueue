@@ -4938,8 +4938,8 @@ func TestIssuePreemptionsRecordsPreemptionLimits(t *testing.T) {
 				}
 			}
 
-			// The PreemptionLimitTracker exposes no read API yet, so the expected
-			// tracker is built with Record, which the limits package tests cover.
+			// Outside the limits package a tracker can only be built through Record,
+			// which the limits package tests cover.
 			wantTracker := limits.NewPreemptionLimitTracker()
 			wantTracker.Record(now, tc.wantRecorded)
 			if diff := cmp.Diff(wantTracker, tracker,
