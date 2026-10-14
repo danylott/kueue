@@ -46,8 +46,10 @@ const (
 
 // SetupControllersOpts holds optional dependencies for SetupControllers.
 type SetupControllersOpts struct {
-	RoleTracker               *roletracker.RoleTracker
-	PreemptionExpectations    *expectations.Store
+	RoleTracker            *roletracker.RoleTracker
+	PreemptionExpectations *expectations.Store
+	// PreemptionLimitTracker is required when the ConfigurablePreemptionLimits
+	// feature gate is enabled, and nil otherwise.
 	PreemptionLimitTracker    *limits.PreemptionLimitTracker
 	CustomLabels              *metrics.CustomLabels
 	DRAMapper                 *dra.ResourceMapper

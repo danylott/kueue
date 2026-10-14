@@ -167,6 +167,7 @@ func WithPreemptionExpectations(store *expectations.Store) Option {
 }
 
 // WithPreemptionLimitTracker sets the tracker for recording confirmed configurable preemptions.
+// It is required when the ConfigurablePreemptionLimits feature gate is enabled, and nil otherwise.
 func WithPreemptionLimitTracker(tracker *limits.PreemptionLimitTracker) Option {
 	return func(o *options) {
 		o.preemptionLimitTracker = tracker
