@@ -71,9 +71,10 @@ func (e events) insert(ts time.Time) events {
 	return slices.Insert(e, i, ts)
 }
 
-// pruneBefore drops the events older than cutoff. The kept events are resliced,
-// not moved; the dropped prefix is released once an insert outgrows the
-// capacity, or when the bucket is deleted.
+// pruneBefore drops the events older than cutoff by reslicing, so the kept
+// events are not copied. The dropped events stay in the backing array until a
+// later insert grows it into a new one, or the bucket is deleted, only then
+// memory is cleaned.
 func (e events) pruneBefore(cutoff time.Time) events {
 	i, _ := slices.BinarySearchFunc(e, cutoff, time.Time.Compare) // first event >= cutoff
 	return e[i:]

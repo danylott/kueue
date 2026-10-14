@@ -186,7 +186,7 @@ func TestPreemptionLimitTrackerPrune(t *testing.T) {
 		events map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
 		want   map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
 	}{
-		"events before the cutoff are dropped and the one at it is kept": {
+		"events before the cutoff are dropped, events at or after it are kept": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"per-cq": {"cq-a": {cutoff.Add(-time.Hour), expired, cutoff, now}},
 			},
@@ -214,6 +214,7 @@ func TestPreemptionLimitTrackerPrune(t *testing.T) {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"per-cq": {"cq-a": {expired}, "cq-b": {expired}},
 			},
+			want: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{},
 		},
 		"other limits are untouched": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
