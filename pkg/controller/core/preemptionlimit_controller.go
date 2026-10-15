@@ -37,8 +37,8 @@ import (
 // a PreemptionLimit are pruned.
 const preemptionLimitPruneInterval = time.Minute
 
-// PreemptionLimitReconciler releases the memory that the PreemptionLimitTracker
-// holds for preemption events no PreemptionLimit can count anymore.
+// PreemptionLimitReconciler aligns the in-memory representation of the PreemptionLimits
+// (see PreemptionLimitTracker) with their current specs.
 type PreemptionLimitReconciler struct {
 	client      client.Client
 	tracker     *limits.PreemptionLimitTracker
@@ -82,8 +82,9 @@ func (r *PreemptionLimitReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{RequeueAfter: preemptionLimitPruneInterval}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager. The controller
-// runs only on the leader, where the scheduler records the preemption events.
+// SetupWithManager sets up the controller with the Manager. It keeps the default
+// leader election, so the controller runs only on the leader, where the scheduler
+// records the preemption events.
 func (r *PreemptionLimitReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("preemptionlimit_controller").

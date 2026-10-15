@@ -17,6 +17,7 @@ limitations under the License.
 package core
 
 import (
+	"errors"
 	"time"
 
 	resourcev1 "k8s.io/api/resource/v1"
@@ -151,6 +152,9 @@ func SetupControllers(mgr ctrl.Manager, qManager *qcache.Manager, cc *schdcache.
 	}
 
 	if features.Enabled(features.ConfigurablePreemptionLimits) {
+		if opts.PreemptionLimitTracker == nil {
+			return "PreemptionLimit", errors.New("PreemptionLimitTracker is required when the ConfigurablePreemptionLimits feature gate is enabled")
+		}
 		plRec := NewPreemptionLimitReconciler(mgr.GetClient(), opts.PreemptionLimitTracker, opts.RoleTracker)
 		if err := plRec.SetupWithManager(mgr); err != nil {
 			return "PreemptionLimit", err
