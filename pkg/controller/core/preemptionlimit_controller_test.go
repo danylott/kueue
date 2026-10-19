@@ -39,6 +39,7 @@ import (
 
 func TestPreemptionLimitReconcile(t *testing.T) {
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	expired := now.Add(-time.Hour)
 	errTest := errors.New("test error")
 	limit := utiltestingalpha.MakePreemptionLimit("limit", kueuealpha.PreemptingCQLimitScope).
 		LimitWindowSeconds(60).
@@ -46,8 +47,8 @@ func TestPreemptionLimitReconcile(t *testing.T) {
 	// recorded holds the preemption events of the tracker, by timestamp.
 	type recorded map[time.Time]policy.ConsumedLimits
 	seeded := recorded{
-		now.Add(-time.Hour): {"limit": "cq-a", "other-limit": "Global"},
-		now:                 {"limit": "cq-b", "other-limit": "Global"},
+		expired: {"limit": "cq-a", "other-limit": "Global"},
+		now:     {"limit": "cq-b", "other-limit": "Global"},
 	}
 
 	cases := map[string]struct {
@@ -60,15 +61,15 @@ func TestPreemptionLimitReconcile(t *testing.T) {
 		"existing limit: expired events are pruned, other limits are untouched": {
 			limit: limit,
 			want: recorded{
-				now.Add(-time.Hour): {"other-limit": "Global"},
-				now:                 {"limit": "cq-b", "other-limit": "Global"},
+				expired: {"other-limit": "Global"},
+				now:     {"limit": "cq-b", "other-limit": "Global"},
 			},
 			wantResult: reconcile.Result{RequeueAfter: time.Minute},
 		},
 		"deleted limit is forgotten, other limits are untouched": {
 			want: recorded{
-				now.Add(-time.Hour): {"other-limit": "Global"},
-				now:                 {"other-limit": "Global"},
+				expired: {"other-limit": "Global"},
+				now:     {"other-limit": "Global"},
 			},
 		},
 		"get error other than NotFound is returned and the tracker is unchanged": {
