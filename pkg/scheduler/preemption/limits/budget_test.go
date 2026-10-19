@@ -20,15 +20,95 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
+	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
+	preemptexpectations "sigs.k8s.io/kueue/pkg/scheduler/preemption/expectations"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
 	utiltestingalpha "sigs.k8s.io/kueue/pkg/util/testing/v1alpha1"
+	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
+	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 func TestPreemptionLimitBudgetTryConsume(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	globalLimit := utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).
+		Limit(1).LimitWindowSeconds(60).Obj()
+	preemptorCQ := &schdcache.ClusterQueueSnapshot{Name: "preempting-cq"}
+	targetCQ := &schdcache.ClusterQueueSnapshot{Name: "preempted-cq"}
+	preemptor := &workload.Info{Obj: utiltestingapi.MakeWorkload("preemptor", "ns").Obj(), ClusterQueue: "preempting-cq"}
+	targetWl := utiltestingapi.MakeWorkload("target", "ns").UID("target")
+
+	cases := map[string]struct {
+		preemptionLimits []kueuealpha.PreemptionLimit
+		remaining        map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32
+		target           *workload.Info
+		wantConsumed     policy.ConsumedLimits
+		wantOK           bool
+		wantRemaining    map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32
+	}{
+		"applicable limits are consumed and taken from the budget": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit},
+			target:           &workload.Info{Obj: targetWl.Clone().Obj(), ClusterQueue: "preempted-cq"},
+			wantConsumed:     policy.ConsumedLimits{"global": "Global"},
+			wantOK:           true,
+			wantRemaining: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32{
+				"global": {"Global": 0},
+			},
+		},
+		"target exceeding a limit is blocked": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit},
+			remaining: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32{
+				"global": {"Global": 0},
+			},
+			target: &workload.Info{Obj: targetWl.Clone().Obj(), ClusterQueue: "preempted-cq"},
+			wantRemaining: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32{
+				"global": {"Global": 0},
+			},
+		},
+		"target whose preemption is in progress is allowed with an exhausted budget": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit},
+			remaining: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32{
+				"global": {"Global": 0},
+			},
+			target: &workload.Info{Obj: targetWl.Clone().EvictedAt(now).Obj(), ClusterQueue: "preempted-cq"},
+			wantOK: true,
+			wantRemaining: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32{
+				"global": {"Global": 0},
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			limiter, err := NewPreemptionLimiter(logr.Discard(), tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj(),
+				NewPreemptionLimitTracker(), preemptexpectations.New(), now)
+			if err != nil {
+				t.Fatalf("NewPreemptionLimiter() unexpected error: %v", err)
+			}
+			budget := limiter.NewBudget()
+			if tc.remaining != nil {
+				budget.remaining = tc.remaining
+			}
+
+			gotConsumed, ok := budget.TryConsume(preemptor, tc.target, preemptorCQ, targetCQ)
+
+			if ok != tc.wantOK {
+				t.Errorf("TryConsume() ok = %v, want %v", ok, tc.wantOK)
+			}
+			if diff := cmp.Diff(tc.wantConsumed, gotConsumed); diff != "" {
+				t.Errorf("Unexpected consumed limits (-want,+got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantRemaining, budget.remaining, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("Unexpected remaining budget (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestPreemptionLimitBudgetTake(t *testing.T) {
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	global := utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).
 		Limit(3).LimitWindowSeconds(60)
@@ -112,15 +192,19 @@ func TestPreemptionLimitBudgetTryConsume(t *testing.T) {
 			if tc.events != nil {
 				tracker.events = tc.events
 			}
-			budget := NewPreemptionLimitBudget(tracker, now, tc.preemptionLimits)
+			limiter, err := NewPreemptionLimiter(logr.Discard(), tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj(), tracker, nil, now)
+			if err != nil {
+				t.Fatalf("NewPreemptionLimiter() unexpected error: %v", err)
+			}
+			budget := limiter.NewBudget()
 			if tc.remaining != nil {
 				budget.remaining = tc.remaining
 			}
 
-			blockedBy, ok := budget.TryConsume(tc.consumedLimits)
+			blockedBy, ok := budget.take(tc.consumedLimits)
 
 			if blockedBy != tc.wantBlockedBy || ok != (tc.wantBlockedBy == "") {
-				t.Errorf("TryConsume() = (%q, %v), want (%q, %v)", blockedBy, ok, tc.wantBlockedBy, tc.wantBlockedBy == "")
+				t.Errorf("take() = (%q, %v), want (%q, %v)", blockedBy, ok, tc.wantBlockedBy, tc.wantBlockedBy == "")
 			}
 			if diff := cmp.Diff(tc.wantRemaining, budget.remaining, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("Unexpected remaining budget (-want,+got):\n%s", diff)

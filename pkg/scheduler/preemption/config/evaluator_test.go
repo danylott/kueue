@@ -547,7 +547,7 @@ func TestPreemptionEvaluatorCandidates(t *testing.T) {
 			wlInfo := workload.NewInfo(log, tc.preemptorWl)
 			wlInfo.ClusterQueue = tc.preemptorCq
 
-			evaluator := NewPreemptionEvaluator(ctx, log, tc.config, nil, nil, nil, nil, time.Time{}, wlInfo, candidatesByName)
+			evaluator := NewPreemptionEvaluator(ctx, log, tc.config, nil, wlInfo, candidatesByName)
 
 			trigger := tc.trigger
 			if trigger == "" {
@@ -749,7 +749,7 @@ func TestPreemptionEvaluatorSelectorIndexes(t *testing.T) {
 			wlInfo := workload.NewInfo(log, tc.preemptorWl)
 			wlInfo.ClusterQueue = tc.preemptorCq
 
-			evaluator := NewPreemptionEvaluator(ctx, log, tc.config, nil, nil, nil, nil, time.Time{}, wlInfo, candidatesByName)
+			evaluator := NewPreemptionEvaluator(ctx, log, tc.config, nil, wlInfo, candidatesByName)
 
 			trigger := tc.trigger
 			if trigger == "" {
@@ -957,7 +957,7 @@ func TestPreemptionEvaluatorFindCandidates(t *testing.T) {
 			preemptor.ClusterQueue = "a"
 			var evaluator *PreemptionEvaluator
 			if tc.config != nil {
-				evaluator = NewPreemptionEvaluator(ctx, log, *tc.config, nil, nil, nil, nil, time.Time{}, preemptor, candidatesByName)
+				evaluator = NewPreemptionEvaluator(ctx, log, *tc.config, nil, preemptor, candidatesByName)
 			}
 			requestedCPU := preemptor.TotalRequests[0].Requests.ResourceValue(corev1.ResourceCPU)
 			quotaFits := func() bool {
@@ -1046,6 +1046,18 @@ func TestNewEvaluatorForPreemptionConfigPreemptionLimits(t *testing.T) {
 			},
 			want: map[string]policy.ConsumedLimits{},
 		},
+		"candidate exceeding a limit is skipped, and later candidates are still yielded": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{*perPreemptedCQLimit.Clone().Limit(1).Obj()},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).Obj(),
+				*unitWl.Clone().Name("b1").SimpleReserveQuota("b", "default", now).Obj(),
+			},
+			want: map[string]policy.ConsumedLimits{
+				"/a1": {"per-preempted-cq": "a"},
+				"/b1": {"per-preempted-cq": "b"},
+			},
+		},
 		"limits not selecting the PreemptionConfig are neither enforced nor attached": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{
 				*utiltestingalpha.MakePreemptionLimit("other-configs", kueuealpha.GlobalPreemptionLimitScope).
@@ -1058,23 +1070,7 @@ func TestNewEvaluatorForPreemptionConfigPreemptionLimits(t *testing.T) {
 				"/a1": nil,
 			},
 		},
-		"evicted candidates are yielded without limits and take no budget": {
-			// a2 comes while the budget is partly used, and a4 once it is exhausted.
-			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit.Clone().Limit(2).Obj()},
-			admitted: []kueue.Workload{
-				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
-				*unitWl.Clone().Name("a2").SimpleReserveQuota("a", "default", now).EvictedAt(now).Obj(),
-				*unitWl.Clone().Name("a3").SimpleReserveQuota("a", "default", now).Obj(),
-				*unitWl.Clone().Name("a4").SimpleReserveQuota("a", "default", now).EvictedAt(now).Obj(),
-			},
-			want: map[string]policy.ConsumedLimits{
-				"/a1": {"global": "Global"},
-				"/a2": nil,
-				"/a3": {"global": "Global"},
-				"/a4": nil,
-			},
-		},
-		"candidates with an unobserved eviction are yielded without limits and take no budget": {
+		"candidates whose preemption is in progress are yielded without limits and take no budget": {
 			// a2 comes while the budget is partly used, and a4 once it is exhausted.
 			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit.Clone().Limit(2).Obj()},
 			admitted: []kueue.Workload{

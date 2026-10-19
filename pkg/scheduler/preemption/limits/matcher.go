@@ -28,33 +28,28 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// PreemptionLimitMatcher is a PreemptionLimit which applies to the PreemptionConfig
-// of a preemptor, with its ClusterQueue selector parsed.
-type PreemptionLimitMatcher struct {
+// preemptionLimitMatcher decides whether one PreemptionLimit applies to a preemption,
+// and which of its buckets the preemption counts against.
+type preemptionLimitMatcher struct {
 	limit                *kueuealpha.PreemptionLimit
 	clusterQueueSelector labels.Selector
 }
 
-// NewPreemptionLimitMatchers returns the matchers of the PreemptionLimits whose
-// configSelector selects config. It returns an error if the configSelector or the
-// clusterQueueSelector of any PreemptionLimit is invalid.
-func NewPreemptionLimitMatchers(preemptionLimits []kueuealpha.PreemptionLimit, config *kueuealpha.PreemptionConfig) ([]PreemptionLimitMatcher, error) {
-	var matchers []PreemptionLimitMatcher
-	for i := range preemptionLimits {
-		limit := &preemptionLimits[i]
-		configSelector, err := selectorOrEverything(limit.Spec.ConfigSelector)
-		if err != nil {
-			return nil, fmt.Errorf("preemptionLimit %q configSelector: %w", limit.Name, err)
-		}
-		clusterQueueSelector, err := selectorOrEverything(limit.Spec.ClusterQueueSelector)
-		if err != nil {
-			return nil, fmt.Errorf("preemptionLimit %q clusterQueueSelector: %w", limit.Name, err)
-		}
-		if configSelector.Matches(labels.Set(config.Labels)) {
-			matchers = append(matchers, PreemptionLimitMatcher{limit: limit, clusterQueueSelector: clusterQueueSelector})
-		}
+// newPreemptionLimitMatcher returns the matcher of limit, or false if limit doesn't
+// apply to config. It returns an error if a selector it needs is invalid.
+func newPreemptionLimitMatcher(limit *kueuealpha.PreemptionLimit, config *kueuealpha.PreemptionConfig) (preemptionLimitMatcher, bool, error) {
+	configSelector, err := selectorOrEverything(limit.Spec.ConfigSelector)
+	if err != nil {
+		return preemptionLimitMatcher{}, false, fmt.Errorf("preemptionLimit %q configSelector: %w", limit.Name, err)
 	}
-	return matchers, nil
+	if !configSelector.Matches(labels.Set(config.Labels)) {
+		return preemptionLimitMatcher{}, false, nil
+	}
+	clusterQueueSelector, err := selectorOrEverything(limit.Spec.ClusterQueueSelector)
+	if err != nil {
+		return preemptionLimitMatcher{}, false, fmt.Errorf("preemptionLimit %q clusterQueueSelector: %w", limit.Name, err)
+	}
+	return preemptionLimitMatcher{limit: limit, clusterQueueSelector: clusterQueueSelector}, true, nil
 }
 
 // selectorOrEverything returns the selector of ls. A nil ls selects everything,
@@ -66,28 +61,11 @@ func selectorOrEverything(ls *metav1.LabelSelector) (labels.Selector, error) {
 	return metav1.LabelSelectorAsSelector(ls)
 }
 
-// Resolve returns the PreemptionLimits consumed by preempting target, admitted in
-// targetCQ, to admit a workload of preemptorCQ, with the scope value each consumes.
-func Resolve(matchers []PreemptionLimitMatcher, preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot, target *workload.Info) policy.ConsumedLimits {
-	var consumedLimits policy.ConsumedLimits
-	for i := range matchers {
-		matcher := &matchers[i]
-		if !matcher.matchesClusterQueues(preemptorCQ, targetCQ) {
-			continue
-		}
-		if consumedLimits == nil {
-			consumedLimits = make(policy.ConsumedLimits)
-		}
-		consumedLimits[policy.PreemptionLimitReference(matcher.limit.Name)] = scopeValue(matcher.limit.Spec.Scope, preemptorCQ, targetCQ, target)
-	}
-	return consumedLimits
-}
-
 // matchesClusterQueues returns whether the clusterQueueSelector of the limit selects
 // the ClusterQueue of its scope: the preemptor's one for PreemptingClusterQueue, the
 // target's one for PreemptedClusterQueue and PreemptedWorkload, and either of them
 // for Global.
-func (m *PreemptionLimitMatcher) matchesClusterQueues(preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot) bool {
+func (m preemptionLimitMatcher) matchesClusterQueues(preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot) bool {
 	switch m.limit.Spec.Scope {
 	case kueuealpha.PreemptingCQLimitScope:
 		return m.clusterQueueSelector.Matches(labels.Set(preemptorCQ.Labels))
@@ -100,12 +78,14 @@ func (m *PreemptionLimitMatcher) matchesClusterQueues(preemptorCQ, targetCQ *sch
 	}
 }
 
-func scopeValue(scope kueuealpha.PreemptionLimitScope, preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot, target *workload.Info) policy.PreemptionLimitScopeValue {
-	switch scope {
+// scopeValue returns the scope value of the limit that preempting target to admit
+// preemptor counts against.
+func (m preemptionLimitMatcher) scopeValue(preemptor, target *workload.Info) policy.PreemptionLimitScopeValue {
+	switch m.limit.Spec.Scope {
 	case kueuealpha.PreemptingCQLimitScope:
-		return policy.PreemptionLimitScopeValue(preemptorCQ.Name)
+		return policy.PreemptionLimitScopeValue(preemptor.ClusterQueue)
 	case kueuealpha.PreemptedCQLimitScope:
-		return policy.PreemptionLimitScopeValue(targetCQ.Name)
+		return policy.PreemptionLimitScopeValue(target.ClusterQueue)
 	case kueuealpha.PreemptedWorkloadLimitScope:
 		return policy.PreemptionLimitScopeValue(workload.Key(target.Obj))
 	default:

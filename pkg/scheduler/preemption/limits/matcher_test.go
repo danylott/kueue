@@ -20,7 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
@@ -31,153 +30,153 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-func TestNewPreemptionLimitMatchers(t *testing.T) {
+func TestNewPreemptionLimitMatcher(t *testing.T) {
 	config := utiltestingalpha.MakePreemptionConfig("config").Label("tier", "gold").Obj()
+	selectsGold := &metav1.LabelSelector{MatchLabels: map[string]string{"tier": "gold"}}
+	selectsSilver := &metav1.LabelSelector{MatchLabels: map[string]string{"tier": "silver"}}
 	invalidSelector := &metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: "invalid"}},
 	}
+	limit := utiltestingalpha.MakePreemptionLimit("limit", kueuealpha.GlobalPreemptionLimitScope)
 
 	cases := map[string]struct {
-		preemptionLimits []kueuealpha.PreemptionLimit
-		want             []string
+		limit       *kueuealpha.PreemptionLimit
+		wantApplies bool
 		// wantErr, when set, is the expected prefix of the error message.
 		wantErr string
 	}{
 		"limit without configSelector applies": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("any-config", kueuealpha.GlobalPreemptionLimitScope).Obj(),
-			},
-			want: []string{"any-config"},
+			limit:       limit.Clone().Obj(),
+			wantApplies: true,
 		},
-		"limit whose configSelector selects the config applies, other limits are dropped": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("gold", kueuealpha.GlobalPreemptionLimitScope).
-					ConfigSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"tier": "gold"}}).Obj(),
-				*utiltestingalpha.MakePreemptionLimit("silver", kueuealpha.GlobalPreemptionLimitScope).
-					ConfigSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"tier": "silver"}}).Obj(),
-			},
-			want: []string{"gold"},
+		"limit whose configSelector selects the config applies": {
+			limit:       limit.Clone().ConfigSelector(selectsGold).Obj(),
+			wantApplies: true,
+		},
+		"limit whose configSelector doesn't select the config doesn't apply": {
+			limit: limit.Clone().ConfigSelector(selectsSilver).Obj(),
 		},
 		"invalid configSelector is an error": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("invalid", kueuealpha.GlobalPreemptionLimitScope).
-					ConfigSelector(invalidSelector).Obj(),
-			},
-			wantErr: `preemptionLimit "invalid" configSelector: `,
+			limit:   limit.Clone().ConfigSelector(invalidSelector).Obj(),
+			wantErr: `preemptionLimit "limit" configSelector: `,
 		},
-		"invalid clusterQueueSelector is an error": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("invalid", kueuealpha.GlobalPreemptionLimitScope).
-					ClusterQueueSelector(invalidSelector).Obj(),
-			},
-			wantErr: `preemptionLimit "invalid" clusterQueueSelector: `,
+		"invalid clusterQueueSelector of a limit applying to the config is an error": {
+			limit:   limit.Clone().ClusterQueueSelector(invalidSelector).Obj(),
+			wantErr: `preemptionLimit "limit" clusterQueueSelector: `,
+		},
+		"invalid clusterQueueSelector of a limit not applying to the config is ignored": {
+			limit: limit.Clone().ConfigSelector(selectsSilver).ClusterQueueSelector(invalidSelector).Obj(),
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			matchers, err := NewPreemptionLimitMatchers(tc.preemptionLimits, config)
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("NewPreemptionLimitMatchers() unexpected error: %v", err)
+			matcher, applies, err := newPreemptionLimitMatcher(tc.limit, config)
+			if tc.wantErr != "" {
+				if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
+					t.Fatalf("newPreemptionLimitMatcher() error = %v, want error starting with %q", err, tc.wantErr)
 				}
-			} else if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
-				t.Fatalf("NewPreemptionLimitMatchers() error = %v, want error starting with %q", err, tc.wantErr)
+				return
 			}
-			var got []string
-			for _, matcher := range matchers {
-				got = append(got, matcher.limit.Name)
+			if err != nil {
+				t.Fatalf("newPreemptionLimitMatcher() unexpected error: %v", err)
 			}
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("Unexpected matched limits (-want,+got):\n%s", diff)
+			if applies != tc.wantApplies {
+				t.Errorf("newPreemptionLimitMatcher() applies = %v, want %v", applies, tc.wantApplies)
+			}
+			if applies && matcher.limit != tc.limit {
+				t.Errorf("newPreemptionLimitMatcher() limit = %v, want %v", matcher.limit, tc.limit)
 			}
 		})
 	}
 }
 
-func TestResolve(t *testing.T) {
-	preemptorCQ := &schdcache.ClusterQueueSnapshot{
-		Name:   "preempting-cq",
-		Labels: map[string]string{"side": "preempting"},
-	}
-	targetCQ := &schdcache.ClusterQueueSnapshot{
-		Name:   "preempted-cq",
-		Labels: map[string]string{"side": "preempted"},
-	}
-	target := &workload.Info{
-		Obj:          utiltestingapi.MakeWorkload("target", "ns").Obj(),
-		ClusterQueue: "preempted-cq",
-	}
+func TestPreemptionLimitMatcherMatchesClusterQueues(t *testing.T) {
+	preemptorCQ := &schdcache.ClusterQueueSnapshot{Name: "preempting-cq", Labels: map[string]string{"side": "preempting"}}
+	targetCQ := &schdcache.ClusterQueueSnapshot{Name: "preempted-cq", Labels: map[string]string{"side": "preempted"}}
 	selectsPreempting := &metav1.LabelSelector{MatchLabels: map[string]string{"side": "preempting"}}
 	selectsPreempted := &metav1.LabelSelector{MatchLabels: map[string]string{"side": "preempted"}}
 	selectsOther := &metav1.LabelSelector{MatchLabels: map[string]string{"side": "other"}}
 
 	cases := map[string]struct {
-		preemptionLimits []kueuealpha.PreemptionLimit
-		want             policy.ConsumedLimits
+		scope                kueuealpha.PreemptionLimitScope
+		clusterQueueSelector *metav1.LabelSelector
+		want                 bool
 	}{
-		"no limits": {},
-		"each scope resolves its scope value": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).Obj(),
-				*utiltestingalpha.MakePreemptionLimit("preempting-cq", kueuealpha.PreemptingCQLimitScope).Obj(),
-				*utiltestingalpha.MakePreemptionLimit("preempted-cq", kueuealpha.PreemptedCQLimitScope).Obj(),
-				*utiltestingalpha.MakePreemptionLimit("preempted-workload", kueuealpha.PreemptedWorkloadLimitScope).Obj(),
-			},
-			want: policy.ConsumedLimits{
-				"global":             "Global",
-				"preempting-cq":      "preempting-cq",
-				"preempted-cq":       "preempted-cq",
-				"preempted-workload": "ns/target",
-			},
+		"limit without clusterQueueSelector matches any ClusterQueues": {
+			scope: kueuealpha.PreemptedCQLimitScope,
+			want:  true,
 		},
-		"preempting ClusterQueue limit applies only when its clusterQueueSelector selects the preemptor's ClusterQueue": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("selects-preempting", kueuealpha.PreemptingCQLimitScope).ClusterQueueSelector(selectsPreempting).Obj(),
-				*utiltestingalpha.MakePreemptionLimit("selects-preempted", kueuealpha.PreemptingCQLimitScope).ClusterQueueSelector(selectsPreempted).Obj(),
-			},
-			want: policy.ConsumedLimits{"selects-preempting": "preempting-cq"},
+		"preempting ClusterQueue limit matches the preemptor's ClusterQueue": {
+			scope:                kueuealpha.PreemptingCQLimitScope,
+			clusterQueueSelector: selectsPreempting,
+			want:                 true,
 		},
-		"preempted ClusterQueue limit applies only when its clusterQueueSelector selects the target's ClusterQueue": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("selects-preempting", kueuealpha.PreemptedCQLimitScope).ClusterQueueSelector(selectsPreempting).Obj(),
-				*utiltestingalpha.MakePreemptionLimit("selects-preempted", kueuealpha.PreemptedCQLimitScope).ClusterQueueSelector(selectsPreempted).Obj(),
-			},
-			want: policy.ConsumedLimits{"selects-preempted": "preempted-cq"},
+		"preempting ClusterQueue limit doesn't match the target's ClusterQueue": {
+			scope:                kueuealpha.PreemptingCQLimitScope,
+			clusterQueueSelector: selectsPreempted,
 		},
-		"preempted workload limit applies only when its clusterQueueSelector selects the target's ClusterQueue": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("selects-preempting", kueuealpha.PreemptedWorkloadLimitScope).ClusterQueueSelector(selectsPreempting).Obj(),
-				*utiltestingalpha.MakePreemptionLimit("selects-preempted", kueuealpha.PreemptedWorkloadLimitScope).ClusterQueueSelector(selectsPreempted).Obj(),
-			},
-			want: policy.ConsumedLimits{"selects-preempted": "ns/target"},
+		"preempted ClusterQueue limit matches the target's ClusterQueue": {
+			scope:                kueuealpha.PreemptedCQLimitScope,
+			clusterQueueSelector: selectsPreempted,
+			want:                 true,
 		},
-		"global limit applies when its clusterQueueSelector selects the preemptor's ClusterQueue": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("selects-preempting", kueuealpha.GlobalPreemptionLimitScope).ClusterQueueSelector(selectsPreempting).Obj(),
-			},
-			want: policy.ConsumedLimits{"selects-preempting": "Global"},
+		"preempted ClusterQueue limit doesn't match the preemptor's ClusterQueue": {
+			scope:                kueuealpha.PreemptedCQLimitScope,
+			clusterQueueSelector: selectsPreempting,
 		},
-		"global limit applies when its clusterQueueSelector selects the target's ClusterQueue": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("selects-preempted", kueuealpha.GlobalPreemptionLimitScope).ClusterQueueSelector(selectsPreempted).Obj(),
-			},
-			want: policy.ConsumedLimits{"selects-preempted": "Global"},
+		"preempted workload limit matches the target's ClusterQueue": {
+			scope:                kueuealpha.PreemptedWorkloadLimitScope,
+			clusterQueueSelector: selectsPreempted,
+			want:                 true,
 		},
-		"global limit does not apply when its clusterQueueSelector selects neither ClusterQueue": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("selects-neither", kueuealpha.GlobalPreemptionLimitScope).ClusterQueueSelector(selectsOther).Obj(),
-			},
+		"preempted workload limit doesn't match the preemptor's ClusterQueue": {
+			scope:                kueuealpha.PreemptedWorkloadLimitScope,
+			clusterQueueSelector: selectsPreempting,
+		},
+		"global limit matches the preemptor's ClusterQueue": {
+			scope:                kueuealpha.GlobalPreemptionLimitScope,
+			clusterQueueSelector: selectsPreempting,
+			want:                 true,
+		},
+		"global limit matches the target's ClusterQueue": {
+			scope:                kueuealpha.GlobalPreemptionLimitScope,
+			clusterQueueSelector: selectsPreempted,
+			want:                 true,
+		},
+		"global limit doesn't match when its clusterQueueSelector selects neither ClusterQueue": {
+			scope:                kueuealpha.GlobalPreemptionLimitScope,
+			clusterQueueSelector: selectsOther,
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			matchers, err := NewPreemptionLimitMatchers(tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj())
+			limit := utiltestingalpha.MakePreemptionLimit("limit", tc.scope).ClusterQueueSelector(tc.clusterQueueSelector).Obj()
+			matcher, _, err := newPreemptionLimitMatcher(limit, utiltestingalpha.MakePreemptionConfig("config").Obj())
 			if err != nil {
-				t.Fatalf("NewPreemptionLimitMatchers() error = %v", err)
+				t.Fatalf("newPreemptionLimitMatcher() unexpected error: %v", err)
 			}
-			got := Resolve(matchers, preemptorCQ, targetCQ, target)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("Unexpected consumed limits (-want,+got):\n%s", diff)
+			if got := matcher.matchesClusterQueues(preemptorCQ, targetCQ); got != tc.want {
+				t.Errorf("matchesClusterQueues() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPreemptionLimitMatcherScopeValue(t *testing.T) {
+	preemptor := &workload.Info{Obj: utiltestingapi.MakeWorkload("preemptor", "ns").Obj(), ClusterQueue: "preempting-cq"}
+	target := &workload.Info{Obj: utiltestingapi.MakeWorkload("target", "ns").Obj(), ClusterQueue: "preempted-cq"}
+
+	cases := map[kueuealpha.PreemptionLimitScope]policy.PreemptionLimitScopeValue{
+		kueuealpha.GlobalPreemptionLimitScope:  "Global",
+		kueuealpha.PreemptingCQLimitScope:      "preempting-cq",
+		kueuealpha.PreemptedCQLimitScope:       "preempted-cq",
+		kueuealpha.PreemptedWorkloadLimitScope: "ns/target",
+	}
+	for scope, want := range cases {
+		t.Run(string(scope), func(t *testing.T) {
+			matcher := preemptionLimitMatcher{limit: utiltestingalpha.MakePreemptionLimit("limit", scope).Obj()}
+			if got := matcher.scopeValue(preemptor, target); got != want {
+				t.Errorf("scopeValue() = %q, want %q", got, want)
 			}
 		})
 	}

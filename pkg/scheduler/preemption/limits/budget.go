@@ -17,42 +17,59 @@ limitations under the License.
 package limits
 
 import (
-	"time"
+	"k8s.io/klog/v2"
 
-	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
+	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
+	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// PreemptionLimitBudget holds the number of preemptions the PreemptionLimits still allow during one
-// preemption search. The budget of each PreemptionLimit and scope value is read from
-// the tracker on first use, then reduced by every preemption taken from it. It is only
-// accurate while no preemption is recorded, which holds during a scheduling attempt.
+// PreemptionLimitBudget tracks how many more preemptions each PreemptionLimit allows
+// during one search for preemption targets.
+//
+// A budget is read from the limiter the first time it is needed, then reduced locally
+// for every preemption taken. That stays accurate because no preemption is recorded
+// while a scheduling attempt runs.
 type PreemptionLimitBudget struct {
-	tracker   *PreemptionLimitTracker
-	now       time.Time
-	limits    map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit
+	limiter   *PreemptionLimiter
 	remaining map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32
 }
 
-// NewPreemptionLimitBudget returns the PreemptionLimitBudget of preemptionLimits, counting the preemptions recorded
-// by tracker within their windows ending at now.
-func NewPreemptionLimitBudget(tracker *PreemptionLimitTracker, now time.Time, preemptionLimits []kueuealpha.PreemptionLimit) *PreemptionLimitBudget {
-	limits := make(map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit, len(preemptionLimits))
-	for i := range preemptionLimits {
-		limits[policy.PreemptionLimitReference(preemptionLimits[i].Name)] = &preemptionLimits[i]
-	}
+// NewBudget returns a budget for one search of preemption targets, with nothing taken yet.
+// It may be called on a nil PreemptionLimiter; the budget then allows every preemption.
+func (l *PreemptionLimiter) NewBudget() *PreemptionLimitBudget {
 	return &PreemptionLimitBudget{
-		tracker:   tracker,
-		now:       now,
-		limits:    limits,
+		limiter:   l,
 		remaining: make(map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32),
 	}
 }
 
-// TryConsume takes one preemption from the budget of every PreemptionLimit and scope
-// value in consumedLimits if all of them have budget left. Otherwise, it takes nothing
-// and returns a PreemptionLimit without budget left.
-func (b *PreemptionLimitBudget) TryConsume(consumedLimits policy.ConsumedLimits) (policy.PreemptionLimitReference, bool) {
+// TryConsume takes one preemption from every PreemptionLimit that preempting target
+// consumes, and returns those limits.
+//
+// If any of them has no budget left, it takes nothing and returns false.
+// If no limit applies, or the preemption of target is already in progress, it takes
+// nothing and returns no limits and true.
+func (b *PreemptionLimitBudget) TryConsume(
+	preemptor, target *workload.Info,
+	preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot,
+) (policy.ConsumedLimits, bool) {
+	consumedLimits := b.limiter.consumedLimits(preemptor, target, preemptorCQ, targetCQ)
+	if len(consumedLimits) == 0 {
+		return nil, true
+	}
+	if limit, ok := b.take(consumedLimits); !ok {
+		b.limiter.log.V(5).Info("Skipping preemption candidate exceeding a PreemptionLimit",
+			"candidate", klog.KObj(target.Obj), "preemptionLimit", limit, "scopeValue", consumedLimits[limit])
+		return nil, false
+	}
+	return consumedLimits, true
+}
+
+// take takes one preemption from the budget of every PreemptionLimit and scope value in
+// consumedLimits, if all of them have budget left. Otherwise, it takes nothing and
+// returns a PreemptionLimit without budget left.
+func (b *PreemptionLimitBudget) take(consumedLimits policy.ConsumedLimits) (policy.PreemptionLimitReference, bool) {
 	for limit, scopeValue := range consumedLimits {
 		if b.remainingFor(limit, scopeValue) <= 0 {
 			return limit, false
@@ -64,8 +81,8 @@ func (b *PreemptionLimitBudget) TryConsume(consumedLimits policy.ConsumedLimits)
 	return "", true
 }
 
-// remainingFor returns the budget left for limit and scopeValue, reading it from the
-// tracker on first use.
+// remainingFor returns the budget left for limit and scopeValue, asking the limiter on
+// first use.
 func (b *PreemptionLimitBudget) remainingFor(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
 	scopes, found := b.remaining[limit]
 	if !found {
@@ -74,8 +91,7 @@ func (b *PreemptionLimitBudget) remainingFor(limit policy.PreemptionLimitReferen
 	}
 	remaining, found := scopes[scopeValue]
 	if !found {
-		preemptionLimit := b.limits[limit]
-		remaining = preemptionLimit.Spec.Limit - b.tracker.Count(b.now, preemptionLimit, scopeValue)
+		remaining = b.limiter.allowance(limit, scopeValue)
 		scopes[scopeValue] = remaining
 	}
 	return remaining

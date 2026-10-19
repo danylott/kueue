@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
@@ -42,7 +41,6 @@ import (
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
 	"sigs.k8s.io/kueue/pkg/util/expectations"
 	"sigs.k8s.io/kueue/pkg/workload"
-	workloadevict "sigs.k8s.io/kueue/pkg/workload/evict"
 )
 
 // PreemptionEvaluator selects the preemption candidates according to the configuration.
@@ -59,46 +57,29 @@ type PreemptionEvaluator struct {
 	// candidatesOrdering orders the candidates of a trigger from the most to the
 	// least preferred one.
 	candidatesOrdering func(a, b *workload.Info) int
-
-	// The fields below are only set when the ConfigurablePreemptionLimits feature
-	// is enabled, to enforce the PreemptionLimits applying to the PreemptionConfig.
-	preemptionLimits        []kueuealpha.PreemptionLimit
-	preemptionLimitMatchers []limits.PreemptionLimitMatcher
-	preemptionLimitTracker  *limits.PreemptionLimitTracker
-	preemptionExpectations  *expectations.Store
-	// now is the time of the preemption attempt, ending the windows of the
-	// PreemptionLimits.
-	now time.Time
+	// preemptionLimiter enforces the PreemptionLimits applying to the PreemptionConfig.
+	// It is nil when the ConfigurablePreemptionLimits feature is disabled.
+	preemptionLimiter *limits.PreemptionLimiter
 }
 
 // NewPreemptionEvaluator returns the PreemptionEvaluator of the given preemptor for the
 // given PreemptionConfig, which yields the candidates of each trigger in the order defined
-// by candidatesOrdering, within the budget of the PreemptionLimits of the given matchers.
-// The budget counts the preemptions recorded by preemptionLimitTracker within the windows
-// of the PreemptionLimits ending at now.
+// by candidatesOrdering, within the PreemptionLimits enforced by preemptionLimiter.
 func NewPreemptionEvaluator(
 	ctx context.Context,
 	log logr.Logger,
 	config kueuealpha.PreemptionConfig,
-	preemptionLimits []kueuealpha.PreemptionLimit,
-	preemptionLimitMatchers []limits.PreemptionLimitMatcher,
-	preemptionLimitTracker *limits.PreemptionLimitTracker,
-	preemptionExpectations *expectations.Store,
-	now time.Time,
+	preemptionLimiter *limits.PreemptionLimiter,
 	preemptor *workload.Info,
 	candidatesOrdering func(a, b *workload.Info) int,
 ) *PreemptionEvaluator {
 	return &PreemptionEvaluator{
-		ctx:                     ctx,
-		log:                     log,
-		config:                  config,
-		preemptor:               preemptor,
-		candidatesOrdering:      candidatesOrdering,
-		preemptionLimits:        preemptionLimits,
-		preemptionLimitMatchers: preemptionLimitMatchers,
-		preemptionLimitTracker:  preemptionLimitTracker,
-		preemptionExpectations:  preemptionExpectations,
-		now:                     now,
+		ctx:                ctx,
+		log:                log,
+		config:             config,
+		preemptionLimiter:  preemptionLimiter,
+		preemptor:          preemptor,
+		candidatesOrdering: candidatesOrdering,
 	}
 }
 
@@ -106,8 +87,9 @@ func NewPreemptionEvaluator(
 // the PreemptionConfig with the given name. When the ConfigurablePreemptionLimits feature is
 // enabled, the evaluator only yields the candidates within the budget of the PreemptionLimits
 // applying to the PreemptionConfig.
-// It returns nil if the PreemptionConfig cannot be read, or, when the ConfigurablePreemptionLimits
-// feature is enabled, if the PreemptionLimits cannot be listed or any of them has an invalid selector.
+// It returns nil if the PreemptionConfig cannot be read. With ConfigurablePreemptionLimits
+// enabled, it also returns nil if the PreemptionLimits cannot be listed or are invalid (see
+// limits.NewPreemptionLimiter).
 func NewEvaluatorForPreemptionConfig(
 	ctx context.Context,
 	log logr.Logger,
@@ -124,10 +106,7 @@ func NewEvaluatorForPreemptionConfig(
 		log.Error(err, "Failed to get PreemptionConfig", "preemptionConfigName", preemptionConfigName)
 		return nil
 	}
-	var (
-		preemptionLimits        []kueuealpha.PreemptionLimit
-		preemptionLimitMatchers []limits.PreemptionLimitMatcher
-	)
+	var preemptionLimiter *limits.PreemptionLimiter
 	if features.Enabled(features.ConfigurablePreemptionLimits) {
 		// Fail fast: without valid PreemptionLimits, the preemptions issued in this
 		// attempt could exceed them, and would not be counted against them.
@@ -137,14 +116,13 @@ func NewEvaluatorForPreemptionConfig(
 			return nil
 		}
 		var err error
-		if preemptionLimitMatchers, err = limits.NewPreemptionLimitMatchers(preemptionLimitList.Items, preemptionConfig); err != nil {
+		preemptionLimiter, err = limits.NewPreemptionLimiter(log, preemptionLimitList.Items, preemptionConfig, preemptionLimitTracker, preemptionExpectations, now)
+		if err != nil {
 			log.Error(err, "Invalid PreemptionLimit, skipping configurable preemptions", "preemptionConfigName", preemptionConfigName)
 			return nil
 		}
-		preemptionLimits = preemptionLimitList.Items
 	}
-	return NewPreemptionEvaluator(ctx, log, *preemptionConfig, preemptionLimits, preemptionLimitMatchers,
-		preemptionLimitTracker, preemptionExpectations, now, preemptor, candidatesOrdering)
+	return NewPreemptionEvaluator(ctx, log, *preemptionConfig, preemptionLimiter, preemptor, candidatesOrdering)
 }
 
 // HasRules returns whether the PreemptionConfig holds any rule at all. It only
@@ -183,7 +161,7 @@ func (p *PreemptionEvaluator) FindCandidates(
 		return
 	}
 
-	budget := limits.NewPreemptionLimitBudget(p.preemptionLimitTracker, p.now, p.preemptionLimits)
+	budget := p.preemptionLimiter.NewBudget()
 	candidates, err := p.orderedCandidates(snapshot, frsNeedPreemption, kueuealpha.Always)
 	if err != nil {
 		return
@@ -233,7 +211,7 @@ func (p *PreemptionEvaluator) iterateOverCandidates(
 	preemptorCQ := snapshot.ClusterQueue(p.preemptor.ClusterQueue)
 	for _, candidate := range candidates {
 		targetCQ := snapshot.ClusterQueue(candidate.WlInfo.ClusterQueue)
-		consumedLimits, withinLimits := p.consumeLimits(budget, preemptorCQ, targetCQ, candidate.WlInfo)
+		consumedLimits, withinLimits := budget.TryConsume(p.preemptor, candidate.WlInfo, preemptorCQ, targetCQ)
 		if !withinLimits {
 			continue
 		}
@@ -251,36 +229,6 @@ func (p *PreemptionEvaluator) iterateOverCandidates(
 		}
 	}
 	return
-}
-
-// consumeLimits returns the PreemptionLimits consumed by preempting target, and
-// takes them from budget. It returns false, taking nothing, if any of them has no
-// budget left.
-func (p *PreemptionEvaluator) consumeLimits(
-	budget *limits.PreemptionLimitBudget,
-	preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot,
-	target *workload.Info,
-) (policy.ConsumedLimits, bool) {
-	consumedLimits := limits.Resolve(p.preemptionLimitMatchers, preemptorCQ, targetCQ, target)
-	if len(consumedLimits) == 0 || p.preemptionInProgress(target) {
-		return nil, true
-	}
-	if limit, ok := budget.TryConsume(consumedLimits); !ok {
-		p.log.V(5).Info("Skipping preemption candidate exceeding a PreemptionLimit",
-			"candidate", klog.KObj(target.Obj), "preemptionLimit", limit, "scopeValue", consumedLimits[limit])
-		return nil, false
-	}
-	return consumedLimits, true
-}
-
-// preemptionInProgress returns whether the preemption of target is already in
-// progress: target is evicted, or its eviction is not observed yet. These are the
-// cases where IssuePreemptions neither evicts target nor records its preemption, so
-// target uses no budget and consumes no PreemptionLimit. A preemptor waiting for its
-// targets re-selects them every cycle until their quota is released.
-func (p *PreemptionEvaluator) preemptionInProgress(target *workload.Info) bool {
-	return workloadevict.IsEvicted(target.Obj) ||
-		!p.preemptionExpectations.Satisfied(p.log, client.ObjectKeyFromObject(target.Obj))
 }
 
 // hasRulesFor returns whether any rule of the PreemptionConfig is activated by one of
