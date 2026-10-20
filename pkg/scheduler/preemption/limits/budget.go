@@ -26,21 +26,19 @@ import (
 
 // PreemptionLimitBudget tracks how many more preemptions each PreemptionLimit allows
 // during one search for preemption targets.
-//
-// A budget is read from the limiter the first time it is needed, then reduced locally
-// for every preemption taken. That stays accurate because no preemption is recorded
-// while a scheduling attempt runs.
 type PreemptionLimitBudget struct {
-	limiter   *PreemptionLimiter
-	remaining map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32
+	limiter *PreemptionLimiter
+	// taken holds the preemptions taken by this search. What is left for a
+	// PreemptionLimit and scope value is the limiter's allowance minus them.
+	taken preemptionCounts
 }
 
 // NewBudget returns a budget for one search of preemption targets, with nothing taken yet.
 // It may be called on a nil PreemptionLimiter; the budget then allows every preemption.
 func (l *PreemptionLimiter) NewBudget() *PreemptionLimitBudget {
 	return &PreemptionLimitBudget{
-		limiter:   l,
-		remaining: make(map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32),
+		limiter: l,
+		taken:   preemptionCounts{},
 	}
 }
 
@@ -71,28 +69,17 @@ func (b *PreemptionLimitBudget) TryConsume(
 // returns a PreemptionLimit without budget left.
 func (b *PreemptionLimitBudget) take(consumedLimits policy.ConsumedLimits) (policy.PreemptionLimitReference, bool) {
 	for limit, scopeValue := range consumedLimits {
-		if b.remainingFor(limit, scopeValue) <= 0 {
+		if b.remaining(limit, scopeValue) <= 0 {
 			return limit, false
 		}
 	}
 	for limit, scopeValue := range consumedLimits {
-		b.remaining[limit][scopeValue]--
+		b.taken.add(limit, scopeValue, 1)
 	}
 	return "", true
 }
 
-// remainingFor returns the budget left for limit and scopeValue, asking the limiter on
-// first use.
-func (b *PreemptionLimitBudget) remainingFor(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
-	scopes, found := b.remaining[limit]
-	if !found {
-		scopes = make(map[policy.PreemptionLimitScopeValue]int32)
-		b.remaining[limit] = scopes
-	}
-	remaining, found := scopes[scopeValue]
-	if !found {
-		remaining = b.limiter.allowance(limit, scopeValue)
-		scopes[scopeValue] = remaining
-	}
-	return remaining
+// remaining returns how many more preemptions limit allows for scopeValue in this search.
+func (b *PreemptionLimitBudget) remaining(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
+	return b.limiter.allowance(limit, scopeValue) - b.taken[limit][scopeValue]
 }

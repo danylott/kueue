@@ -29,6 +29,18 @@ import (
 // "now" lags slightly behind still find every event they count.
 const pruneGracePeriod = time.Minute
 
+// preemptionCounts holds a number of preemptions per PreemptionLimit and scope value.
+// A missing entry counts as 0.
+type preemptionCounts map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]int32
+
+// add adds n preemptions for limit and scopeValue.
+func (c preemptionCounts) add(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue, n int32) {
+	if c[limit] == nil {
+		c[limit] = make(map[policy.PreemptionLimitScopeValue]int32)
+	}
+	c[limit][scopeValue] += n
+}
+
 // events holds preemption timestamps in ascending order.
 type events []time.Time
 
@@ -91,13 +103,25 @@ func windowStart(now time.Time, limit *kueuealpha.PreemptionLimit) time.Time {
 	return now.Add(-time.Duration(limit.Spec.LimitWindowSeconds) * time.Second)
 }
 
-// Count returns the number of preemptions recorded for limit and scopeValue within
-// the window of limit ending at now, including those recorded exactly at its start.
-func (t *PreemptionLimitTracker) Count(now time.Time, limit *kueuealpha.PreemptionLimit, scopeValue policy.PreemptionLimitScopeValue) int32 {
-	cutoff := windowStart(now, limit)
+// counts returns, for each of limits, the number of preemptions recorded for each scope
+// value within the window of the limit ending at now, including those recorded exactly at
+// its start. Scope values without preemptions in the window are left out.
+//
+// All the counts are read at once, so they are consistent with each other.
+func (t *PreemptionLimitTracker) counts(now time.Time, limits []*kueuealpha.PreemptionLimit) preemptionCounts {
+	counts := make(preemptionCounts, len(limits))
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return int32(t.events[policy.PreemptionLimitReference(limit.Name)][scopeValue].countSince(cutoff))
+	for _, limit := range limits {
+		ref := policy.PreemptionLimitReference(limit.Name)
+		cutoff := windowStart(now, limit)
+		for scopeValue, e := range t.events[ref] {
+			if count := e.countSince(cutoff); count > 0 {
+				counts.add(ref, scopeValue, int32(count))
+			}
+		}
+	}
+	return counts
 }
 
 // Prune drops the events of limit recorded before now minus its window and

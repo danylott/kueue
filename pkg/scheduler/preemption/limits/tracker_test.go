@@ -30,65 +30,70 @@ import (
 	utiltestingalpha "sigs.k8s.io/kueue/pkg/util/testing/v1alpha1"
 )
 
-func TestPreemptionLimitTrackerCount(t *testing.T) {
-	const windowSeconds = 60
+func TestPreemptionLimitTrackerCounts(t *testing.T) {
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	cutoff := now.Add(-windowSeconds * time.Second)
-	limit := utiltestingalpha.MakePreemptionLimit("per-cq", kueuealpha.PreemptingCQLimitScope).LimitWindowSeconds(windowSeconds).Obj()
+	perCQ := utiltestingalpha.MakePreemptionLimit("per-cq", kueuealpha.PreemptingCQLimitScope).LimitWindowSeconds(60).Obj()
+	cutoff := now.Add(-60 * time.Second)
 
 	cases := map[string]struct {
-		events     map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
-		limit      *kueuealpha.PreemptionLimit
-		scopeValue policy.PreemptionLimitScopeValue
-		want       int32
+		events map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
+		limits []*kueuealpha.PreemptionLimit
+		want   preemptionCounts
 	}{
 		"events before the window are not counted": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"per-cq": {"cq-a": {cutoff.Add(-time.Hour), cutoff.Add(-time.Nanosecond), cutoff.Add(time.Nanosecond), now}},
 			},
-			limit:      limit,
-			scopeValue: "cq-a",
-			want:       2,
+			limits: []*kueuealpha.PreemptionLimit{perCQ},
+			want: preemptionCounts{
+				"per-cq": {"cq-a": 2},
+			},
 		},
 		"event at the start of the window is counted": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"per-cq": {"cq-a": {cutoff}},
 			},
-			limit:      limit,
-			scopeValue: "cq-a",
-			want:       1,
-		},
-		"window comes from the limit spec": {
-			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
-				"per-cq": {"cq-a": {now.Add(-2 * time.Hour), now.Add(-30 * time.Minute)}},
+			limits: []*kueuealpha.PreemptionLimit{perCQ},
+			want: preemptionCounts{
+				"per-cq": {"cq-a": 1},
 			},
-			limit:      utiltestingalpha.MakePreemptionLimit("per-cq", kueuealpha.PreemptingCQLimitScope).LimitWindowSeconds(3600).Obj(),
-			scopeValue: "cq-a",
-			want:       1,
 		},
-		"unknown limit counts nothing": {
+		"each limit counts within its own window": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {now.Add(-30 * time.Minute)}},
+				"global": {"Global": {now.Add(-2 * time.Hour), now.Add(-30 * time.Minute)}},
+			},
+			limits: []*kueuealpha.PreemptionLimit{
+				perCQ,
+				utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).LimitWindowSeconds(3600).Obj(),
+			},
+			want: preemptionCounts{
+				"global": {"Global": 1},
+			},
+		},
+		"every scope value of a limit is counted": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {now}, "cq-b": {now, now}},
+			},
+			limits: []*kueuealpha.PreemptionLimit{perCQ},
+			want: preemptionCounts{
+				"per-cq": {"cq-a": 1, "cq-b": 2},
+			},
+		},
+		"limits that are not asked for are not counted": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"other": {"cq-a": {now}},
 			},
-			limit:      limit,
-			scopeValue: "cq-a",
-			want:       0,
-		},
-		"unknown scope value counts nothing": {
-			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
-				"per-cq": {"cq-b": {now}},
-			},
-			limit:      limit,
-			scopeValue: "cq-a",
-			want:       0,
+			limits: []*kueuealpha.PreemptionLimit{perCQ},
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			tracker := NewPreemptionLimitTracker()
 			tracker.events = tc.events
-			if got := tracker.Count(now, tc.limit, tc.scopeValue); got != tc.want {
-				t.Errorf("Count() = %d, want %d", got, tc.want)
+			got := tracker.counts(now, tc.limits)
+			if diff := cmp.Diff(tc.want, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("Unexpected counts (-want,+got):\n%s", diff)
 			}
 		})
 	}

@@ -69,7 +69,7 @@ func TestNewPreemptionLimiter(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			limiter, err := NewPreemptionLimiter(logr.Discard(), tc.preemptionLimits, config, nil, nil, time.Time{})
+			limiter, err := NewPreemptionLimiter(logr.Discard(), tc.preemptionLimits, config, NewPreemptionLimitTracker(), nil, time.Time{})
 			if tc.wantErr != "" {
 				if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
 					t.Fatalf("NewPreemptionLimiter() error = %v, want error starting with %q", err, tc.wantErr)
@@ -136,7 +136,7 @@ func TestPreemptionLimiterConsumedLimits(t *testing.T) {
 			if tc.unobservedEviction {
 				preemptionExpectations.ExpectUIDs(log, client.ObjectKeyFromObject(target.Obj), []types.UID{target.Obj.UID})
 			}
-			limiter, err := NewPreemptionLimiter(log, tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj(), nil, preemptionExpectations, time.Time{})
+			limiter, err := NewPreemptionLimiter(log, tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj(), NewPreemptionLimitTracker(), preemptionExpectations, time.Time{})
 			if err != nil {
 				t.Fatalf("NewPreemptionLimiter() unexpected error: %v", err)
 			}
@@ -146,6 +146,67 @@ func TestPreemptionLimiterConsumedLimits(t *testing.T) {
 			got := limiter.consumedLimits(preemptor, cmp.Or(tc.target, target), preemptorCQ, targetCQ)
 			if diff := gocmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("Unexpected consumed limits (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestPreemptionLimiterAllowance(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	perCQ := *utiltestingalpha.MakePreemptionLimit("per-cq", kueuealpha.PreemptedCQLimitScope).
+		Limit(3).LimitWindowSeconds(60).Obj()
+
+	cases := map[string]struct {
+		events map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
+		// changeTracker, when set, changes the tracker after the limiter is created.
+		changeTracker func(*PreemptionLimitTracker)
+		want          int32
+	}{
+		"allowance is the limit minus the preemptions within the window": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {now.Add(-2 * time.Minute), now.Add(-30 * time.Second)}, "cq-b": {now}},
+			},
+			want: 2,
+		},
+		"allowance doesn't change when the tracker forgets the limit after the limiter is created": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {now, now}},
+			},
+			changeTracker: func(tracker *PreemptionLimitTracker) { tracker.Forget("per-cq") },
+			want:          1,
+		},
+		"allowance doesn't change when the tracker prunes the limit after the limiter is created": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {now.Add(-50 * time.Second), now}},
+			},
+			changeTracker: func(tracker *PreemptionLimitTracker) {
+				// Drops all the events, as a prune with a shrunk window would.
+				tracker.Prune(now.Add(time.Hour), utiltestingalpha.MakePreemptionLimit("per-cq", kueuealpha.PreemptedCQLimitScope).LimitWindowSeconds(1).Obj())
+			},
+			want: 1,
+		},
+		"allowance doesn't change when the tracker records preemptions after the limiter is created": {
+			changeTracker: func(tracker *PreemptionLimitTracker) {
+				tracker.Record(now, policy.ConsumedLimits{"per-cq": "cq-a"})
+			},
+			want: 3,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			tracker := NewPreemptionLimitTracker()
+			if tc.events != nil {
+				tracker.events = tc.events
+			}
+			limiter, err := NewPreemptionLimiter(logr.Discard(), []kueuealpha.PreemptionLimit{perCQ}, utiltestingalpha.MakePreemptionConfig("config").Obj(), tracker, nil, now)
+			if err != nil {
+				t.Fatalf("NewPreemptionLimiter() unexpected error: %v", err)
+			}
+			if tc.changeTracker != nil {
+				tc.changeTracker(tracker)
+			}
+			if got := limiter.allowance("per-cq", "cq-a"); got != tc.want {
+				t.Errorf("allowance() = %d, want %d", got, tc.want)
 			}
 		})
 	}

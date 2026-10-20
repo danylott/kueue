@@ -35,19 +35,25 @@ import (
 //
 // It decides which PreemptionLimits a preemption consumes, and how many more
 // preemptions each of them allows. The budgets it creates do the counting.
+//
+// It keeps the PreemptionLimits it is given, which must not be modified afterwards, and
+// a copy of their recorded preemptions, taken when it is created. So the whole
+// scheduling attempt sees the same state, even if the PreemptionLimits or the tracker
+// change in the meantime.
+//
 // A nil PreemptionLimiter enforces no PreemptionLimit.
 type PreemptionLimiter struct {
 	log          logr.Logger
 	matchers     map[policy.PreemptionLimitReference]preemptionLimitMatcher
-	tracker      *PreemptionLimitTracker
 	expectations *expectations.Store
-	// now is the time of the scheduling attempt, where the windows of the
-	// PreemptionLimits end.
-	now time.Time
+	// recorded holds the preemptions recorded within the window of each limit
+	// when the limiter was created.
+	recorded preemptionCounts
 }
 
 // NewPreemptionLimiter returns the PreemptionLimiter of the PreemptionLimits whose
-// configSelector selects config.
+// configSelector selects config, counting the preemptions recorded by tracker within
+// their windows ending at now. tracker must not be nil.
 //
 // It returns an error if the configSelector of any PreemptionLimit is invalid, or if the
 // clusterQueueSelector of a PreemptionLimit applying to config is invalid.
@@ -60,6 +66,7 @@ func NewPreemptionLimiter(
 	now time.Time,
 ) (*PreemptionLimiter, error) {
 	matchers := make(map[policy.PreemptionLimitReference]preemptionLimitMatcher)
+	var applyingLimits []*kueuealpha.PreemptionLimit
 	for i := range preemptionLimits {
 		limit := &preemptionLimits[i]
 		matcher, applies, err := newPreemptionLimitMatcher(limit, config)
@@ -68,14 +75,14 @@ func NewPreemptionLimiter(
 		}
 		if applies {
 			matchers[policy.PreemptionLimitReference(limit.Name)] = matcher
+			applyingLimits = append(applyingLimits, limit)
 		}
 	}
 	return &PreemptionLimiter{
 		log:          log,
 		matchers:     matchers,
-		tracker:      tracker,
 		expectations: preemptionExpectations,
-		now:          now,
+		recorded:     tracker.counts(now, applyingLimits),
 	}, nil
 }
 
@@ -122,6 +129,5 @@ func (l *PreemptionLimiter) preemptionInProgress(target *workload.Info) bool {
 // allowance returns how many more preemptions limit allows for scopeValue: its limit
 // minus the preemptions recorded within its window.
 func (l *PreemptionLimiter) allowance(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
-	preemptionLimit := l.matchers[limit].limit
-	return preemptionLimit.Spec.Limit - l.tracker.Count(l.now, preemptionLimit, scopeValue)
+	return l.matchers[limit].limit.Spec.Limit - l.recorded[limit][scopeValue]
 }
