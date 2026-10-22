@@ -60,10 +60,8 @@ func (e events) countSince(cutoff time.Time) int {
 	return len(e) - i
 }
 
-// pruneBefore drops the events older than cutoff by reslicing, so the kept
-// events are not copied. The dropped events stay in the backing array until a
-// later insert grows it into a new one, or the bucket is deleted, only then
-// memory is cleaned.
+// pruneBefore reslices e to drop events before cutoff without copying. Dropped
+// elements stay in memory until a later insert reallocates the slice.
 func (e events) pruneBefore(cutoff time.Time) events {
 	i, _ := slices.BinarySearchFunc(e, cutoff, time.Time.Compare) // first event >= cutoff
 	return e[i:]
@@ -103,11 +101,8 @@ func windowStart(now time.Time, limit *kueuealpha.PreemptionLimit) time.Time {
 	return now.Add(-time.Duration(limit.Spec.LimitWindowSeconds) * time.Second)
 }
 
-// counts returns, for each of limits, the number of preemptions recorded for each scope
-// value within the window of the limit ending at now, including those recorded exactly at
-// its start. Scope values without preemptions in the window are left out.
-//
-// All the counts are read at once, so they are consistent with each other.
+// counts returns a consistent snapshot of the preemptions recorded for limits
+// within their windows [windowStart, now]. Scope values with 0 events are omitted.
 func (t *PreemptionLimitTracker) counts(now time.Time, limits []*kueuealpha.PreemptionLimit) preemptionCounts {
 	counts := make(preemptionCounts, len(limits))
 	t.mu.RLock()

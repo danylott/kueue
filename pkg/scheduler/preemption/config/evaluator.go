@@ -84,12 +84,9 @@ func NewPreemptionEvaluator(
 }
 
 // NewEvaluatorForPreemptionConfig returns the PreemptionEvaluator of the given preemptor for
-// the PreemptionConfig with the given name. When the ConfigurablePreemptionLimits feature is
-// enabled, the evaluator only yields the candidates within the budget of the PreemptionLimits
-// applying to the PreemptionConfig.
-// It returns nil if the PreemptionConfig cannot be read. With ConfigurablePreemptionLimits
-// enabled, it also returns nil if the PreemptionLimits cannot be listed or are invalid (see
-// limits.NewPreemptionLimiter).
+// the PreemptionConfig with the given name. It returns nil if the PreemptionConfig cannot be
+// read, or if ConfigurablePreemptionLimits is enabled and the PreemptionLimits cannot be
+// listed or are invalid.
 func NewEvaluatorForPreemptionConfig(
 	ctx context.Context,
 	log logr.Logger,
@@ -108,8 +105,7 @@ func NewEvaluatorForPreemptionConfig(
 	}
 	var preemptionLimiter *limits.PreemptionLimiter
 	if features.Enabled(features.ConfigurablePreemptionLimits) {
-		// Fail fast: without valid PreemptionLimits, the preemptions issued in this
-		// attempt could exceed them, and would not be counted against them.
+		// Fail closed so preemptions cannot exceed unreadable or invalid limits.
 		preemptionLimitList := &kueuealpha.PreemptionLimitList{}
 		if err := cl.List(ctx, preemptionLimitList); err != nil {
 			log.Error(err, "Failed to list PreemptionLimits, skipping configurable preemptions", "preemptionConfigName", preemptionConfigName)

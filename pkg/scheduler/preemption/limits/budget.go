@@ -24,17 +24,16 @@ import (
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
-// PreemptionLimitBudget tracks how many more preemptions each PreemptionLimit allows
-// during one search for preemption targets.
+// PreemptionLimitBudget counts the preemptions taken from the PreemptionLimits
+// during one pass of candidate selection.
 type PreemptionLimitBudget struct {
 	limiter *PreemptionLimiter
-	// taken holds the preemptions taken by this search. What is left for a
-	// PreemptionLimit and scope value is the limiter's allowance minus them.
+	// taken holds the preemptions taken from this budget.
 	taken preemptionCounts
 }
 
-// NewBudget returns a budget for one search of preemption targets, with nothing taken yet.
-// It may be called on a nil PreemptionLimiter; the budget then allows every preemption.
+// NewBudget returns an empty budget for one pass of candidate selection.
+// A budget from a nil PreemptionLimiter imposes no limits.
 func (l *PreemptionLimiter) NewBudget() *PreemptionLimitBudget {
 	return &PreemptionLimitBudget{
 		limiter: l,
@@ -42,12 +41,9 @@ func (l *PreemptionLimiter) NewBudget() *PreemptionLimitBudget {
 	}
 }
 
-// TryConsume takes one preemption from every PreemptionLimit that preempting target
-// consumes, and returns those limits.
-//
-// If any of them has no budget left, it takes nothing and returns false.
-// If no limit applies, or the preemption of target is already in progress, it takes
-// nothing and returns no limits and true.
+// TryConsume takes one preemption from every limit that preempting target
+// consumes, and returns those limits. If any limit has no budget left, it takes
+// nothing and returns false.
 func (b *PreemptionLimitBudget) TryConsume(
 	preemptor, target *workload.Info,
 	preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot,
@@ -64,9 +60,8 @@ func (b *PreemptionLimitBudget) TryConsume(
 	return consumedLimits, true
 }
 
-// take takes one preemption from the budget of every PreemptionLimit and scope value in
-// consumedLimits, if all of them have budget left. Otherwise, it takes nothing and
-// returns a PreemptionLimit without budget left.
+// take consumes one preemption from each limit in consumedLimits, or takes
+// nothing and returns a limit that has no budget left.
 func (b *PreemptionLimitBudget) take(consumedLimits policy.ConsumedLimits) (policy.PreemptionLimitReference, bool) {
 	for limit, scopeValue := range consumedLimits {
 		if b.remaining(limit, scopeValue) <= 0 {
@@ -79,7 +74,7 @@ func (b *PreemptionLimitBudget) take(consumedLimits policy.ConsumedLimits) (poli
 	return "", true
 }
 
-// remaining returns how many more preemptions limit allows for scopeValue in this search.
+// remaining returns the limiter's allowance minus the preemptions taken from this budget.
 func (b *PreemptionLimitBudget) remaining(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
 	return b.limiter.allowance(limit, scopeValue) - b.taken[limit][scopeValue]
 }

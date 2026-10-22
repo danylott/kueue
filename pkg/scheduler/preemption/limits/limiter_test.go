@@ -26,6 +26,7 @@ import (
 
 	"github.com/go-logr/logr"
 	gocmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -144,7 +145,7 @@ func TestPreemptionLimiterConsumedLimits(t *testing.T) {
 				limiter = nil
 			}
 			got := limiter.consumedLimits(preemptor, cmp.Or(tc.target, target), preemptorCQ, targetCQ)
-			if diff := gocmp.Diff(tc.want, got); diff != "" {
+			if diff := gocmp.Diff(tc.want, got, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("Unexpected consumed limits (-want,+got):\n%s", diff)
 			}
 		})

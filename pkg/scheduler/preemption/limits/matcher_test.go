@@ -70,7 +70,7 @@ func TestNewPreemptionLimitMatcher(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			matcher, applies, err := newPreemptionLimitMatcher(tc.limit, config)
+			matcher, err := newPreemptionLimitMatcher(tc.limit, config)
 			if tc.wantErr != "" {
 				if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
 					t.Fatalf("newPreemptionLimitMatcher() error = %v, want error starting with %q", err, tc.wantErr)
@@ -80,10 +80,10 @@ func TestNewPreemptionLimitMatcher(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newPreemptionLimitMatcher() unexpected error: %v", err)
 			}
-			if applies != tc.wantApplies {
-				t.Errorf("newPreemptionLimitMatcher() applies = %v, want %v", applies, tc.wantApplies)
+			if applies := matcher != nil; applies != tc.wantApplies {
+				t.Fatalf("newPreemptionLimitMatcher() = %v, want a matcher: %v", matcher, tc.wantApplies)
 			}
-			if applies && matcher.limit != tc.limit {
+			if matcher != nil && matcher.limit != tc.limit {
 				t.Errorf("newPreemptionLimitMatcher() limit = %v, want %v", matcher.limit, tc.limit)
 			}
 		})
@@ -151,7 +151,7 @@ func TestPreemptionLimitMatcherMatchesClusterQueues(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			limit := utiltestingalpha.MakePreemptionLimit("limit", tc.scope).ClusterQueueSelector(tc.clusterQueueSelector).Obj()
-			matcher, _, err := newPreemptionLimitMatcher(limit, utiltestingalpha.MakePreemptionConfig("config").Obj())
+			matcher, err := newPreemptionLimitMatcher(limit, utiltestingalpha.MakePreemptionConfig("config").Obj())
 			if err != nil {
 				t.Fatalf("newPreemptionLimitMatcher() unexpected error: %v", err)
 			}
@@ -174,7 +174,7 @@ func TestPreemptionLimitMatcherScopeValue(t *testing.T) {
 	}
 	for scope, want := range cases {
 		t.Run(string(scope), func(t *testing.T) {
-			matcher := preemptionLimitMatcher{limit: utiltestingalpha.MakePreemptionLimit("limit", scope).Obj()}
+			matcher := &preemptionLimitMatcher{limit: utiltestingalpha.MakePreemptionLimit("limit", scope).Obj()}
 			if got := matcher.scopeValue(preemptor, target); got != want {
 				t.Errorf("scopeValue() = %q, want %q", got, want)
 			}

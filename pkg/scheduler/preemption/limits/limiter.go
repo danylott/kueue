@@ -30,33 +30,26 @@ import (
 	workloadevict "sigs.k8s.io/kueue/pkg/workload/evict"
 )
 
-// PreemptionLimiter enforces the PreemptionLimits that apply to one PreemptionConfig
-// during one scheduling attempt.
+// PreemptionLimiter enforces the PreemptionLimits for a PreemptionConfig
+// during a single scheduling attempt.
 //
-// It decides which PreemptionLimits a preemption consumes, and how many more
-// preemptions each of them allows. The budgets it creates do the counting.
+// It captures a point-in-time snapshot of recorded preemptions and limits, so
+// the scheduling attempt sees a consistent state even if limits or the tracker
+// change concurrently. The caller must not modify the passed PreemptionLimits.
 //
-// It keeps the PreemptionLimits it is given, which must not be modified afterwards, and
-// a copy of their recorded preemptions, taken when it is created. So the whole
-// scheduling attempt sees the same state, even if the PreemptionLimits or the tracker
-// change in the meantime.
-//
-// A nil PreemptionLimiter enforces no PreemptionLimit.
+// A nil PreemptionLimiter imposes no limits.
 type PreemptionLimiter struct {
 	log          logr.Logger
-	matchers     map[policy.PreemptionLimitReference]preemptionLimitMatcher
+	matchers     map[policy.PreemptionLimitReference]*preemptionLimitMatcher
 	expectations *expectations.Store
 	// recorded holds the preemptions recorded within the window of each limit
 	// when the limiter was created.
 	recorded preemptionCounts
 }
 
-// NewPreemptionLimiter returns the PreemptionLimiter of the PreemptionLimits whose
-// configSelector selects config, counting the preemptions recorded by tracker within
-// their windows ending at now. tracker must not be nil.
-//
-// It returns an error if the configSelector of any PreemptionLimit is invalid, or if the
-// clusterQueueSelector of a PreemptionLimit applying to config is invalid.
+// NewPreemptionLimiter returns a PreemptionLimiter for the PreemptionLimits that
+// apply to config, with windows ending at now. tracker and
+// preemptionExpectations must not be nil.
 func NewPreemptionLimiter(
 	log logr.Logger,
 	preemptionLimits []kueuealpha.PreemptionLimit,
@@ -65,15 +58,15 @@ func NewPreemptionLimiter(
 	preemptionExpectations *expectations.Store,
 	now time.Time,
 ) (*PreemptionLimiter, error) {
-	matchers := make(map[policy.PreemptionLimitReference]preemptionLimitMatcher)
+	matchers := make(map[policy.PreemptionLimitReference]*preemptionLimitMatcher)
 	var applyingLimits []*kueuealpha.PreemptionLimit
 	for i := range preemptionLimits {
 		limit := &preemptionLimits[i]
-		matcher, applies, err := newPreemptionLimitMatcher(limit, config)
+		matcher, err := newPreemptionLimitMatcher(limit, config)
 		if err != nil {
 			return nil, err
 		}
-		if applies {
+		if matcher != nil {
 			matchers[policy.PreemptionLimitReference(limit.Name)] = matcher
 			applyingLimits = append(applyingLimits, limit)
 		}
@@ -86,48 +79,33 @@ func NewPreemptionLimiter(
 	}, nil
 }
 
-// consumedLimits returns the PreemptionLimits that preempting target to admit preemptor
-// consumes, each with its scope value. preemptorCQ and targetCQ are the ClusterQueues of
-// preemptor and target.
-//
-// It returns nil if no PreemptionLimit applies, or if the preemption of target is already
-// in progress.
+// consumedLimits returns the limits and scope values that preempting target for
+// preemptor consumes, or no limits if target's preemption is already in progress.
 func (l *PreemptionLimiter) consumedLimits(
 	preemptor, target *workload.Info,
 	preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot,
 ) policy.ConsumedLimits {
-	if l == nil {
+	if l == nil || l.preemptionInProgress(target) {
 		return nil
 	}
-	var consumedLimits policy.ConsumedLimits
+	consumedLimits := make(policy.ConsumedLimits)
 	for ref, matcher := range l.matchers {
-		if !matcher.matchesClusterQueues(preemptorCQ, targetCQ) {
-			continue
+		if matcher.matchesClusterQueues(preemptorCQ, targetCQ) {
+			consumedLimits[ref] = matcher.scopeValue(preemptor, target)
 		}
-		if consumedLimits == nil {
-			consumedLimits = make(policy.ConsumedLimits)
-		}
-		consumedLimits[ref] = matcher.scopeValue(preemptor, target)
-	}
-	if len(consumedLimits) == 0 || l.preemptionInProgress(target) {
-		return nil
 	}
 	return consumedLimits
 }
 
-// preemptionInProgress returns whether target is evicted, or its eviction was issued but
-// is not observed yet.
-//
-// A preemptor waiting for such a target selects it again every cycle until its quota is
-// released. IssuePreemptions neither evicts it again nor records it, so it must not
-// consume any budget either.
+// preemptionInProgress reports whether target's eviction is already in progress.
+// A waiting preemptor re-selects such a target every cycle until the target's
+// quota is released, and IssuePreemptions does not evict or record it again.
 func (l *PreemptionLimiter) preemptionInProgress(target *workload.Info) bool {
 	return workloadevict.IsEvicted(target.Obj) ||
 		!l.expectations.Satisfied(l.log, client.ObjectKeyFromObject(target.Obj))
 }
 
-// allowance returns how many more preemptions limit allows for scopeValue: its limit
-// minus the preemptions recorded within its window.
+// allowance returns the limit minus the preemptions recorded within its window.
 func (l *PreemptionLimiter) allowance(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
 	return l.matchers[limit].limit.Spec.Limit - l.recorded[limit][scopeValue]
 }

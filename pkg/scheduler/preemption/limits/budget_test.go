@@ -17,11 +17,12 @@ limitations under the License.
 package limits
 
 import (
+	"cmp"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/google/go-cmp/cmp"
+	gocmp "github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
@@ -35,71 +36,6 @@ import (
 
 func TestPreemptionLimitBudgetTryConsume(t *testing.T) {
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	globalLimit := utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).
-		Limit(1).LimitWindowSeconds(60).Obj()
-	preemptorCQ := &schdcache.ClusterQueueSnapshot{Name: "preempting-cq"}
-	targetCQ := &schdcache.ClusterQueueSnapshot{Name: "preempted-cq"}
-	preemptor := &workload.Info{Obj: utiltestingapi.MakeWorkload("preemptor", "ns").Obj(), ClusterQueue: "preempting-cq"}
-	targetWl := utiltestingapi.MakeWorkload("target", "ns").UID("target")
-
-	cases := map[string]struct {
-		preemptionLimits []kueuealpha.PreemptionLimit
-		taken            preemptionCounts
-		target           *workload.Info
-		wantConsumed     policy.ConsumedLimits
-		wantOK           bool
-		wantTaken        preemptionCounts
-	}{
-		"applicable limits are consumed and taken from the budget": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit},
-			target:           &workload.Info{Obj: targetWl.Clone().Obj(), ClusterQueue: "preempted-cq"},
-			wantConsumed:     policy.ConsumedLimits{"global": "Global"},
-			wantOK:           true,
-			wantTaken:        preemptionCounts{"global": {"Global": 1}},
-		},
-		"target exceeding a limit is blocked": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit},
-			taken:            preemptionCounts{"global": {"Global": 1}},
-			target:           &workload.Info{Obj: targetWl.Clone().Obj(), ClusterQueue: "preempted-cq"},
-			wantTaken:        preemptionCounts{"global": {"Global": 1}},
-		},
-		"target whose preemption is in progress is allowed with an exhausted budget": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{*globalLimit},
-			taken:            preemptionCounts{"global": {"Global": 1}},
-			target:           &workload.Info{Obj: targetWl.Clone().EvictedAt(now).Obj(), ClusterQueue: "preempted-cq"},
-			wantOK:           true,
-			wantTaken:        preemptionCounts{"global": {"Global": 1}},
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			limiter, err := NewPreemptionLimiter(logr.Discard(), tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj(),
-				NewPreemptionLimitTracker(), preemptexpectations.New(), now)
-			if err != nil {
-				t.Fatalf("NewPreemptionLimiter() unexpected error: %v", err)
-			}
-			budget := limiter.NewBudget()
-			if tc.taken != nil {
-				budget.taken = tc.taken
-			}
-
-			gotConsumed, ok := budget.TryConsume(preemptor, tc.target, preemptorCQ, targetCQ)
-
-			if ok != tc.wantOK {
-				t.Errorf("TryConsume() ok = %v, want %v", ok, tc.wantOK)
-			}
-			if diff := cmp.Diff(tc.wantConsumed, gotConsumed); diff != "" {
-				t.Errorf("Unexpected consumed limits (-want,+got):\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.wantTaken, budget.taken, cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("Unexpected taken preemptions (-want,+got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestPreemptionLimitBudgetTake(t *testing.T) {
-	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	global := utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).
 		Limit(3).LimitWindowSeconds(60)
 	perCQ := utiltestingalpha.MakePreemptionLimit("per-cq", kueuealpha.PreemptedCQLimitScope).
@@ -107,60 +43,84 @@ func TestPreemptionLimitBudgetTake(t *testing.T) {
 	twoRecordedGlobalEvents := map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 		"global": {"Global": {now.Add(-2 * time.Minute), now.Add(-30 * time.Second), now}},
 	}
+	preemptorCQ := &schdcache.ClusterQueueSnapshot{Name: "preempting-cq"}
+	targetCQ := &schdcache.ClusterQueueSnapshot{Name: "preempted-cq"}
+	preemptor := &workload.Info{Obj: utiltestingapi.MakeWorkload("preemptor", "ns").Obj(), ClusterQueue: "preempting-cq"}
+	targetWl := utiltestingapi.MakeWorkload("target", "ns").UID("target")
+	target := &workload.Info{Obj: targetWl.Clone().Obj(), ClusterQueue: "preempted-cq"}
 
 	cases := map[string]struct {
 		preemptionLimits []kueuealpha.PreemptionLimit
 		events           map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
 		taken            preemptionCounts
-		consumedLimits   policy.ConsumedLimits
-		wantBlockedBy    policy.PreemptionLimitReference
-		wantTaken        preemptionCounts
+		// target, when set, replaces the default target.
+		target       *workload.Info
+		wantConsumed policy.ConsumedLimits
+		wantOK       bool
+		wantTaken    preemptionCounts
 	}{
-		"budget is the limit minus the recorded preemptions": {
+		"target consuming no limit is allowed and takes nothing": {
+			wantOK: true,
+		},
+		"consumed limit is taken from the budget": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj()},
-			events:           twoRecordedGlobalEvents,
-			consumedLimits:   policy.ConsumedLimits{"global": "Global"},
+			wantConsumed:     policy.ConsumedLimits{"global": "Global"},
+			wantOK:           true,
 			wantTaken:        preemptionCounts{"global": {"Global": 1}},
 		},
-		"preemptions taken by this search count against the budget": {
+		"consumed limit is added to preemptions already taken from the budget": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj()},
+			taken:            preemptionCounts{"global": {"Global": 2}},
+			wantConsumed:     policy.ConsumedLimits{"global": "Global"},
+			wantOK:           true,
+			wantTaken:        preemptionCounts{"global": {"Global": 3}},
+		},
+		"budget accounts for recorded preemptions within the window": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj()},
+			events:           twoRecordedGlobalEvents,
+			wantConsumed:     policy.ConsumedLimits{"global": "Global"},
+			wantOK:           true,
+			wantTaken:        preemptionCounts{"global": {"Global": 1}},
+		},
+		"target is blocked when recorded and taken preemptions reach the limit": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj()},
 			events:           twoRecordedGlobalEvents,
 			taken:            preemptionCounts{"global": {"Global": 1}},
-			consumedLimits:   policy.ConsumedLimits{"global": "Global"},
-			wantBlockedBy:    "global",
+			wantOK:           false,
 			wantTaken:        preemptionCounts{"global": {"Global": 1}},
 		},
-		"each preemption taken adds to what this search took": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj()},
-			taken:            preemptionCounts{"global": {"Global": 2}},
-			consumedLimits:   policy.ConsumedLimits{"global": "Global"},
-			wantTaken:        preemptionCounts{"global": {"Global": 3}},
-		},
-		"limit of 0 has no budget": {
+		"limit of 0 blocks the target": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(0).Obj()},
-			consumedLimits:   policy.ConsumedLimits{"global": "Global"},
-			wantBlockedBy:    "global",
+			wantOK:           false,
 		},
-		"every consumed limit is taken from": {
+		"multiple applicable limits are all consumed and taken from the budget": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj(), *perCQ.Obj()},
-			consumedLimits:   policy.ConsumedLimits{"global": "Global", "per-cq": "cq-a"},
+			wantConsumed:     policy.ConsumedLimits{"global": "Global", "per-cq": "preempted-cq"},
+			wantOK:           true,
 			wantTaken: preemptionCounts{
 				"global": {"Global": 1},
-				"per-cq": {"cq-a": 1},
+				"per-cq": {"preempted-cq": 1},
 			},
 		},
-		"limit without budget left blocks, and nothing is taken from the others": {
+		"exhausted limit blocks the target and takes nothing from other limits": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj(), *perCQ.Obj()},
-			taken:            preemptionCounts{"per-cq": {"cq-a": 1}},
-			consumedLimits:   policy.ConsumedLimits{"global": "Global", "per-cq": "cq-a"},
-			wantBlockedBy:    "per-cq",
-			wantTaken:        preemptionCounts{"per-cq": {"cq-a": 1}},
+			taken:            preemptionCounts{"per-cq": {"preempted-cq": 1}},
+			wantOK:           false,
+			wantTaken:        preemptionCounts{"per-cq": {"preempted-cq": 1}},
 		},
 		"scope values of a limit have independent budgets": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*perCQ.Obj()},
-			taken:            preemptionCounts{"per-cq": {"cq-a": 1}},
-			consumedLimits:   policy.ConsumedLimits{"per-cq": "cq-b"},
-			wantTaken:        preemptionCounts{"per-cq": {"cq-a": 1, "cq-b": 1}},
+			taken:            preemptionCounts{"per-cq": {"other-cq": 1}},
+			wantConsumed:     policy.ConsumedLimits{"per-cq": "preempted-cq"},
+			wantOK:           true,
+			wantTaken:        preemptionCounts{"per-cq": {"other-cq": 1, "preempted-cq": 1}},
+		},
+		"target with preemption in progress is allowed even when budget is exhausted": {
+			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj()},
+			taken:            preemptionCounts{"global": {"Global": 3}},
+			target:           &workload.Info{Obj: targetWl.Clone().EvictedAt(now).Obj(), ClusterQueue: "preempted-cq"},
+			wantOK:           true,
+			wantTaken:        preemptionCounts{"global": {"Global": 3}},
 		},
 	}
 	for name, tc := range cases {
@@ -169,7 +129,8 @@ func TestPreemptionLimitBudgetTake(t *testing.T) {
 			if tc.events != nil {
 				tracker.events = tc.events
 			}
-			limiter, err := NewPreemptionLimiter(logr.Discard(), tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj(), tracker, nil, now)
+			limiter, err := NewPreemptionLimiter(logr.Discard(), tc.preemptionLimits, utiltestingalpha.MakePreemptionConfig("config").Obj(),
+				tracker, preemptexpectations.New(), now)
 			if err != nil {
 				t.Fatalf("NewPreemptionLimiter() unexpected error: %v", err)
 			}
@@ -178,12 +139,15 @@ func TestPreemptionLimitBudgetTake(t *testing.T) {
 				budget.taken = tc.taken
 			}
 
-			blockedBy, ok := budget.take(tc.consumedLimits)
+			gotConsumed, ok := budget.TryConsume(preemptor, cmp.Or(tc.target, target), preemptorCQ, targetCQ)
 
-			if blockedBy != tc.wantBlockedBy || ok != (tc.wantBlockedBy == "") {
-				t.Errorf("take() = (%q, %v), want (%q, %v)", blockedBy, ok, tc.wantBlockedBy, tc.wantBlockedBy == "")
+			if ok != tc.wantOK {
+				t.Errorf("TryConsume() ok = %v, want %v", ok, tc.wantOK)
 			}
-			if diff := cmp.Diff(tc.wantTaken, budget.taken, cmpopts.EquateEmpty()); diff != "" {
+			if diff := gocmp.Diff(tc.wantConsumed, gotConsumed); diff != "" {
+				t.Errorf("Unexpected consumed limits (-want,+got):\n%s", diff)
+			}
+			if diff := gocmp.Diff(tc.wantTaken, budget.taken, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("Unexpected taken preemptions (-want,+got):\n%s", diff)
 			}
 		})
