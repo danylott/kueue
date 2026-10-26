@@ -17,9 +17,12 @@ limitations under the License.
 package limits
 
 import (
-	"strings"
+	"errors"
+	"fmt"
 	"testing"
 
+	gocmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
@@ -37,13 +40,12 @@ func TestNewPreemptionLimitMatcher(t *testing.T) {
 	invalidSelector := &metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: "invalid"}},
 	}
-	limit := utiltestingalpha.MakePreemptionLimit("limit", kueuealpha.GlobalPreemptionLimitScope)
+	limit := utiltestingalpha.MakePreemptionLimit("limit", kueuealpha.GlobalPreemptionLimitScope).LimitWindowSeconds(60)
 
 	cases := map[string]struct {
 		limit       *kueuealpha.PreemptionLimit
 		wantApplies bool
-		// wantErr, when set, is the expected prefix of the error message.
-		wantErr string
+		wantErr     *selectorError
 	}{
 		"limit without configSelector applies": {
 			limit:       limit.Clone().Obj(),
@@ -58,11 +60,11 @@ func TestNewPreemptionLimitMatcher(t *testing.T) {
 		},
 		"invalid configSelector is an error": {
 			limit:   limit.Clone().ConfigSelector(invalidSelector).Obj(),
-			wantErr: `preemptionLimit "limit" configSelector: `,
+			wantErr: &selectorError{PreemptionLimit: "limit", Selector: "configSelector"},
 		},
 		"invalid clusterQueueSelector of a limit applying to the config is an error": {
 			limit:   limit.Clone().ClusterQueueSelector(invalidSelector).Obj(),
-			wantErr: `preemptionLimit "limit" clusterQueueSelector: `,
+			wantErr: &selectorError{PreemptionLimit: "limit", Selector: "clusterQueueSelector"},
 		},
 		"invalid clusterQueueSelector of a limit not applying to the config is ignored": {
 			limit: limit.Clone().ConfigSelector(selectsSilver).ClusterQueueSelector(invalidSelector).Obj(),
@@ -71,14 +73,11 @@ func TestNewPreemptionLimitMatcher(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			matcher, err := newPreemptionLimitMatcher(tc.limit, config)
-			if tc.wantErr != "" {
-				if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
-					t.Fatalf("newPreemptionLimitMatcher() error = %v, want error starting with %q", err, tc.wantErr)
-				}
-				return
+			if diff := diffSelectorError(tc.wantErr, err); diff != "" {
+				t.Fatalf("newPreemptionLimitMatcher() unexpected error (-want,+got):\n%s", diff)
 			}
 			if err != nil {
-				t.Fatalf("newPreemptionLimitMatcher() unexpected error: %v", err)
+				return
 			}
 			if applies := matcher != nil; applies != tc.wantApplies {
 				t.Fatalf("newPreemptionLimitMatcher() = %v, want a matcher: %v", matcher, tc.wantApplies)
@@ -150,7 +149,7 @@ func TestPreemptionLimitMatcherMatchesClusterQueues(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			limit := utiltestingalpha.MakePreemptionLimit("limit", tc.scope).ClusterQueueSelector(tc.clusterQueueSelector).Obj()
+			limit := utiltestingalpha.MakePreemptionLimit("limit", tc.scope).LimitWindowSeconds(60).ClusterQueueSelector(tc.clusterQueueSelector).Obj()
 			matcher, err := newPreemptionLimitMatcher(limit, utiltestingalpha.MakePreemptionConfig("config").Obj())
 			if err != nil {
 				t.Fatalf("newPreemptionLimitMatcher() unexpected error: %v", err)
@@ -174,10 +173,19 @@ func TestPreemptionLimitMatcherScopeValue(t *testing.T) {
 	}
 	for scope, want := range cases {
 		t.Run(string(scope), func(t *testing.T) {
-			matcher := &preemptionLimitMatcher{limit: utiltestingalpha.MakePreemptionLimit("limit", scope).Obj()}
+			matcher := &preemptionLimitMatcher{limit: utiltestingalpha.MakePreemptionLimit("limit", scope).LimitWindowSeconds(60).Obj()}
 			if got := matcher.scopeValue(preemptor, target); got != want {
 				t.Errorf("scopeValue() = %q, want %q", got, want)
 			}
 		})
 	}
+}
+
+// diffSelectorError compares err with want, ignoring the wrapped error.
+func diffSelectorError(want *selectorError, err error) string {
+	var got *selectorError
+	if err != nil && !errors.As(err, &got) {
+		return fmt.Sprintf("unexpected error type: %v", err)
+	}
+	return gocmp.Diff(want, got, cmpopts.IgnoreFields(selectorError{}, "Err"))
 }

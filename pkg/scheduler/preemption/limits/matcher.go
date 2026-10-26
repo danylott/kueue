@@ -35,19 +35,34 @@ type preemptionLimitMatcher struct {
 	clusterQueueSelector labels.Selector
 }
 
+// selectorError reports an invalid selector on a PreemptionLimit.
+type selectorError struct {
+	PreemptionLimit string
+	Selector        string
+	Err             error
+}
+
+func (e *selectorError) Error() string {
+	return fmt.Sprintf("preemptionLimit %q %s: %v", e.PreemptionLimit, e.Selector, e.Err)
+}
+
+func (e *selectorError) Unwrap() error {
+	return e.Err
+}
+
 // newPreemptionLimitMatcher returns the matcher for limit, or nil if limit
 // doesn't apply to config. It returns an error if a selector it needs is invalid.
 func newPreemptionLimitMatcher(limit *kueuealpha.PreemptionLimit, config *kueuealpha.PreemptionConfig) (*preemptionLimitMatcher, error) {
 	configSelector, err := selectorOrEverything(limit.Spec.ConfigSelector)
 	if err != nil {
-		return nil, fmt.Errorf("preemptionLimit %q configSelector: %w", limit.Name, err)
+		return nil, &selectorError{PreemptionLimit: limit.Name, Selector: "configSelector", Err: err}
 	}
 	if !configSelector.Matches(labels.Set(config.Labels)) {
 		return nil, nil
 	}
 	clusterQueueSelector, err := selectorOrEverything(limit.Spec.ClusterQueueSelector)
 	if err != nil {
-		return nil, fmt.Errorf("preemptionLimit %q clusterQueueSelector: %w", limit.Name, err)
+		return nil, &selectorError{PreemptionLimit: limit.Name, Selector: "clusterQueueSelector", Err: err}
 	}
 	return &preemptionLimitMatcher{limit: limit, clusterQueueSelector: clusterQueueSelector}, nil
 }

@@ -75,7 +75,7 @@ func TestPreemptionLimitBudgetTryConsume(t *testing.T) {
 			wantOK:           true,
 			wantTaken:        preemptionCounts{"global": {"Global": 3}},
 		},
-		"budget accounts for recorded preemptions within the window": {
+		"budget allows preemption if there are fewer recorded events than the limit": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Obj()},
 			events:           twoRecordedGlobalEvents,
 			wantConsumed:     policy.ConsumedLimits{"global": "Global"},

@@ -1059,7 +1059,7 @@ func TestNewEvaluatorForPreemptionConfigPreemptionLimits(t *testing.T) {
 		},
 		"limits not selecting the PreemptionConfig are neither enforced nor attached": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("other-configs", kueuealpha.GlobalPreemptionLimitScope).
+				*utiltestingalpha.MakePreemptionLimit("other-configs", kueuealpha.GlobalPreemptionLimitScope).LimitWindowSeconds(windowSeconds).
 					ConfigSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"tier": "other"}}).Obj(),
 			},
 			admitted: []kueue.Workload{
@@ -1129,7 +1129,7 @@ func TestNewEvaluatorForPreemptionConfigPreemptionLimits(t *testing.T) {
 		},
 		"no candidates are yielded when a PreemptionLimit has an invalid selector": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{
-				*utiltestingalpha.MakePreemptionLimit("invalid", kueuealpha.GlobalPreemptionLimitScope).Limit(10).
+				*utiltestingalpha.MakePreemptionLimit("invalid", kueuealpha.GlobalPreemptionLimitScope).Limit(10).LimitWindowSeconds(windowSeconds).
 					ClusterQueueSelector(&metav1.LabelSelector{
 						MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: "invalid"}},
 					}).Obj(),
