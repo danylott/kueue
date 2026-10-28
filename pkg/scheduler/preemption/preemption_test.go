@@ -5389,100 +5389,57 @@ func TestPreemptionWithPodsQuota(t *testing.T) {
 
 func TestSnapshotPreemptionLimits(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
-	listErr := errors.New("simulated List error")
-	cq := utiltestingapi.MakeClusterQueue("standalone").
-		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "2").Obj()).
-		Annotation(kueuealpha.PreemptionConfigNameAnnotation, "config").
-		Obj()
-	config := utiltestingalpha.MakePreemptionConfig("config").
-		Rule("rule", kueuealpha.Always, kueuealpha.PreemptionConfigPreemptionCandidateSelector{Scope: kueuealpha.WithinClusterQueue}).
-		Obj()
 	global := utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).Limit(1).LimitWindowSeconds(60).Obj()
-	victim := utiltestingapi.MakeWorkload("victim", "").
-		Request(corev1.ResourceCPU, "2").
-		ReserveQuotaAt(utiltestingapi.MakeAdmission("standalone").
-			PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
-				Assignment(corev1.ResourceCPU, "default", "2").Obj()).
-			Obj(), now).
-		Obj()
 
 	cases := map[string]struct {
-		// recordedAt are the preemptions recorded against the PreemptionLimit before the cycle.
-		recordedAt []time.Time
-		// listErrs are the results of listing the PreemptionLimits in consecutive
-		// cycles, the last of which looks for targets.
-		listErrs    []error
-		wantTargets []string
+		disableLimits bool
+		listErr       error
+		wantSnapshot  bool
 	}{
-		"victim within the PreemptionLimit is a target": {
-			listErrs:    []error{nil},
-			wantTargets: []string{"victim"},
+		"snapshot holds the listed PreemptionLimits and the preemptions recorded within their windows": {
+			wantSnapshot: true,
 		},
-		"preemptions recorded within the window count against the PreemptionLimit": {
-			recordedAt: []time.Time{now.Add(-30 * time.Second)},
-			listErrs:   []error{nil},
+		"no snapshot when the PreemptionLimits can't be listed": {
+			listErr: errors.New("simulated List error"),
 		},
-		"no targets when the PreemptionLimits can't be listed": {
-			listErrs: []error{listErr},
-		},
-		"no targets when the PreemptionLimits can't be listed after an earlier cycle listed them": {
-			listErrs: []error{nil, listErr},
+		"no snapshot when the ConfigurablePreemptionLimits feature is disabled": {
+			disableLimits: true,
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGatesDuringTest(t, map[featuregate.Feature]bool{
 				features.ConfigurablePreemptions:      true,
-				features.ConfigurablePreemptionLimits: true,
+				features.ConfigurablePreemptionLimits: !tc.disableLimits,
 			})
-			ctx, log := utiltesting.ContextWithLog(t)
-			listErrs := tc.listErrs
+			ctx, _ := utiltesting.ContextWithLog(t)
 			cl := utiltesting.NewClientBuilder().
-				WithObjects(config, global, victim.DeepCopy()).
+				WithObjects(global).
 				WithInterceptorFuncs(interceptor.Funcs{
 					List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-						if _, ok := list.(*kueuealpha.PreemptionLimitList); ok {
-							err := listErrs[0]
-							listErrs = listErrs[1:]
-							if err != nil {
-								return err
-							}
+						if tc.listErr != nil {
+							return tc.listErr
 						}
 						return c.List(ctx, list, opts...)
 					},
 				}).
 				Build()
-			cqCache := schdcache.New(cl)
-			cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
-			if err := cqCache.AddClusterQueue(ctx, cq); err != nil {
-				t.Fatalf("Couldn't add ClusterQueue to cache: %v", err)
-			}
-			snapshot, err := cqCache.Snapshot(ctx)
-			if err != nil {
-				t.Fatalf("unexpected error while building snapshot: %v", err)
-			}
 			tracker := limits.NewPreemptionLimitTracker()
-			for _, ts := range tc.recordedAt {
-				tracker.Record(ts, policy.ConsumedLimits{"global": "Global"})
-			}
+			tracker.Record(now.Add(-30*time.Second), policy.ConsumedLimits{"global": "Global"})
 			preemptor := New(cl, workload.Ordering{}, &utiltesting.EventRecorder{}, nil, false, clocktesting.NewFakeClock(now), nil, preemptexpectations.New(), nil, tracker)
+			// Left over from the previous scheduling cycle.
+			preemptor.preemptionLimits = &limits.PreemptionLimitsSnapshot{}
 
-			for range tc.listErrs {
-				preemptor.SnapshotPreemptionLimits(ctx)
-			}
-			wlInfo := workload.NewInfo(log, utiltestingapi.MakeWorkload("in", "").Request(corev1.ResourceCPU, "2").Obj())
-			wlInfo.ClusterQueue = "standalone"
-			assignment := singlePodSetAssignment(flavorassigner.ResourceAssignment{
-				corev1.ResourceCPU: &flavorassigner.FlavorAssignment{Name: "default", Mode: flavorassigner.Preempt},
-			})
-			targets := preemptor.GetTargetsWithStrategy(ctx, preemptor.GetPreemptionStrategyIterator(ctx, *wlInfo, snapshot, assignment))
+			preemptor.SnapshotPreemptionLimits(ctx)
 
-			gotTargets := make([]string, 0, len(targets))
-			for _, target := range targets {
-				gotTargets = append(gotTargets, target.WorkloadInfo.Obj.Name)
+			var want *limits.PreemptionLimitsSnapshot
+			if tc.wantSnapshot {
+				want = tracker.Snapshot(now, []kueuealpha.PreemptionLimit{*global})
 			}
-			if diff := cmp.Diff(tc.wantTargets, gotTargets, cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("Unexpected targets (-want,+got):\n%s", diff)
+			if diff := cmp.Diff(want, preemptor.preemptionLimits,
+				cmp.AllowUnexported(limits.PreemptionLimitsSnapshot{}),
+			); diff != "" {
+				t.Errorf("Unexpected PreemptionLimits snapshot (-want,+got):\n%s", diff)
 			}
 		})
 	}
