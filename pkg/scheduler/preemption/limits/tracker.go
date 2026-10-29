@@ -108,12 +108,12 @@ func (t *PreemptionLimitTracker) Snapshot(now time.Time, preemptionLimits []kueu
 	for i := range preemptionLimits {
 		limits[i] = &preemptionLimits[i]
 	}
-	return &PreemptionLimitsSnapshot{limits: limits, recorded: t.counts(now, limits)}
+	return &PreemptionLimitsSnapshot{limits: limits, recorded: t.Counts(now, limits)}
 }
 
-// counts returns a consistent snapshot of the preemptions recorded for limits
+// Counts returns a consistent snapshot of the preemptions recorded for limits
 // within their windows [windowStart, now]. Scope values with 0 events are omitted.
-func (t *PreemptionLimitTracker) counts(now time.Time, limits []*kueuealpha.PreemptionLimit) preemptionCounts {
+func (t *PreemptionLimitTracker) Counts(now time.Time, limits []*kueuealpha.PreemptionLimit) preemptionCounts {
 	counts := make(preemptionCounts, len(limits))
 	t.mu.RLock()
 	defer t.mu.RUnlock()
