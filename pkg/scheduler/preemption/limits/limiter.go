@@ -93,5 +93,5 @@ func (l *PreemptionLimiter) preemptionInProgress(target *workload.Info) bool {
 
 // allowance returns the limit minus the preemptions recorded within its window.
 func (l *PreemptionLimiter) allowance(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
-	return l.matchers[limit].limit.Spec.Limit - l.snapshot.recorded[limit][scopeValue]
+	return l.snapshot.allowance(limit, scopeValue)
 }
