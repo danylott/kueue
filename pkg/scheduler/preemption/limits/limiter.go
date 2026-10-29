@@ -28,8 +28,8 @@ import (
 	workloadevict "sigs.k8s.io/kueue/pkg/workload/evict"
 )
 
-// PreemptionLimiter enforces the PreemptionLimits of a scheduling cycle's
-// snapshot that apply to a PreemptionConfig, during a single scheduling attempt.
+// PreemptionLimiter enforces the PreemptionLimits of a snapshot that apply to
+// a PreemptionConfig, during a single scheduling attempt.
 //
 // A nil PreemptionLimiter imposes no limits.
 type PreemptionLimiter struct {
@@ -91,7 +91,7 @@ func (l *PreemptionLimiter) preemptionInProgress(target *workload.Info) bool {
 		!l.expectations.Satisfied(l.log, client.ObjectKeyFromObject(target.Obj))
 }
 
-// allowance returns the limit minus the preemptions counted against it in this cycle.
+// allowance returns the limit minus the preemptions recorded within its window.
 func (l *PreemptionLimiter) allowance(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
 	return l.matchers[limit].limit.Spec.Limit - l.snapshot.recorded[limit][scopeValue]
 }

@@ -2306,15 +2306,26 @@ func TestSchedule(t *testing.T) {
 					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "1").Obj()).
 					Annotation(kueuealpha.PreemptionConfigNameAnnotation, "limited-config").
 					Obj(),
+				*utiltestingapi.MakeClusterQueue("blocked-cq").
+					Label("preemption", "blocked").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "1").Obj()).
+					Annotation(kueuealpha.PreemptionConfigNameAnnotation, "limited-config").
+					Obj(),
 			},
 			additionalLocalQueues: []kueue.LocalQueue{
 				*utiltestingapi.MakeLocalQueue("limited-lq", "sales").ClusterQueue("limited-cq").Obj(),
+				*utiltestingapi.MakeLocalQueue("blocked-lq", "sales").ClusterQueue("blocked-cq").Obj(),
 			},
 			objects: []client.Object{
 				utiltestingalpha.MakePreemptionConfig("limited-config").
 					Rule("within-cq", kueuealpha.Always, kueuealpha.PreemptionConfigPreemptionCandidateSelector{Scope: kueuealpha.WithinClusterQueue}).
 					Obj(),
 				utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).Limit(1).LimitWindowSeconds(60).Obj(),
+				utiltestingalpha.MakePreemptionLimit("blocked", kueuealpha.GlobalPreemptionLimitScope).
+					PreemptorClusterQueueSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"preemption": "blocked"}}).
+					Limit(0).
+					LimitWindowSeconds(60).
+					Obj(),
 			},
 			workloads: []kueue.Workload{
 				*utiltestingapi.MakeWorkload("new", "sales").
@@ -2329,8 +2340,52 @@ func TestSchedule(t *testing.T) {
 							Obj()).
 						Obj(), now).
 					Obj(),
+				*utiltestingapi.MakeWorkload("blocked", "sales").
+					Queue("blocked-lq").
+					Request(corev1.ResourceCPU, "1").
+					Obj(),
+				*utiltestingapi.MakeWorkload("blocked-victim", "sales").
+					Request(corev1.ResourceCPU, "1").
+					ReserveQuotaAt(utiltestingapi.MakeAdmission("blocked-cq").
+						PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
+							Assignment(corev1.ResourceCPU, "default", "1").
+							Obj()).
+						Obj(), now).
+					Obj(),
 			},
 			wantWorkloads: []kueue.Workload{
+				*utiltestingapi.MakeWorkload("blocked", "sales").
+					Queue("blocked-lq").
+					Request(corev1.ResourceCPU, "1").
+					Condition(metav1.Condition{
+						Type:               kueue.WorkloadQuotaReserved,
+						Status:             metav1.ConditionFalse,
+						Reason:             kueue.WorkloadQuotaReservedReasonWaitingForQuota,
+						Message:            "couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor default, 1 more needed",
+						LastTransitionTime: metav1.NewTime(now),
+					}).
+					Condition(metav1.Condition{
+						Type:               kueue.WorkloadAdmitted,
+						Status:             metav1.ConditionFalse,
+						Reason:             kueue.WorkloadAdmittedReasonNoReservation,
+						Message:            "The workload has no reservation",
+						LastTransitionTime: metav1.NewTime(now),
+					}).
+					ResourceRequests(kueue.PodSetRequest{
+						Name: "main",
+						Resources: corev1.ResourceList{
+							corev1.ResourceCPU: resource.MustParse("1"),
+						},
+					}).
+					Obj(),
+				*utiltestingapi.MakeWorkload("blocked-victim", "sales").
+					Request(corev1.ResourceCPU, "1").
+					ReserveQuotaAt(utiltestingapi.MakeAdmission("blocked-cq").
+						PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
+							Assignment(corev1.ResourceCPU, "default", "1").
+							Obj()).
+						Obj(), now).
+					Obj(),
 				*utiltestingapi.MakeWorkload("new", "sales").
 					Queue("limited-lq").
 					Request(corev1.ResourceCPU, "1").
@@ -2384,10 +2439,20 @@ func TestSchedule(t *testing.T) {
 					Obj(),
 			},
 			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				// Preemptor is not admitted in this cycle; it waits for the victim's eviction to complete.
 				"limited-cq": {"sales/new"},
 			},
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"blocked-cq": {"sales/blocked"},
+			},
 			wantAssignments: map[workload.Reference]kueue.Admission{
+				// Removal from cache for the preempted workload is deferred until we receive Workload updates.
 				"sales/victim": *utiltestingapi.MakeAdmission("limited-cq").
+					PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
+						Assignment(corev1.ResourceCPU, "default", "1").
+						Obj()).
+					Obj(),
+				"sales/blocked-victim": *utiltestingapi.MakeAdmission("blocked-cq").
 					PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
 						Assignment(corev1.ResourceCPU, "default", "1").
 						Obj()).

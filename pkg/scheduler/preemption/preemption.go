@@ -77,8 +77,8 @@ type Preemptor struct {
 	customLabels           *metrics.CustomLabels
 	preemptionExpectations *expectations.Store
 	preemptionLimitTracker *limits.PreemptionLimitTracker
-	// preemptionLimits holds the PreemptionLimits enforced in the current scheduling cycle.
-	preemptionLimits *limits.PreemptionLimitsSnapshot
+	// limitsSnapshot holds the PreemptionLimits enforced in the current scheduling cycle.
+	limitsSnapshot *limits.PreemptionLimitsSnapshot
 }
 
 // PreemptionStrategy represents a singular set of ordered potential preemption candidates.
@@ -225,7 +225,7 @@ func (p *Preemptor) buildContext(
 // current scheduling cycle. If they can't be listed, the cycle skips configurable
 // preemptions.
 func (p *Preemptor) SnapshotPreemptionLimits(ctx context.Context) {
-	p.preemptionLimits = nil
+	p.limitsSnapshot = nil
 	if !features.Enabled(features.ConfigurablePreemptionLimits) {
 		return
 	}
@@ -234,7 +234,7 @@ func (p *Preemptor) SnapshotPreemptionLimits(ctx context.Context) {
 		log.FromContext(ctx).Error(err, "Failed to list PreemptionLimits, skipping configurable preemptions in this scheduling cycle")
 		return
 	}
-	p.preemptionLimits = p.preemptionLimitTracker.Snapshot(p.clock.Now(), preemptionLimitList.Items)
+	p.limitsSnapshot = p.preemptionLimitTracker.Snapshot(p.clock.Now(), preemptionLimitList.Items)
 }
 
 // Resolved once per attempt: both algorithms evaluate several triggers, and the
@@ -245,7 +245,7 @@ func (p *Preemptor) newConfigurableEvaluator(ctx context.Context, log logr.Logge
 	if !features.Enabled(features.ConfigurablePreemptions) || cq == nil || cq.PreemptionConfigName == nil {
 		return nil
 	}
-	return configurable.NewEvaluatorForPreemptionConfig(ctx, log, p.client, p.preemptionLimits, p.preemptionExpectations,
+	return configurable.NewEvaluatorForPreemptionConfig(ctx, log, p.client, p.limitsSnapshot, p.preemptionExpectations,
 		*cq.PreemptionConfigName, preemptor, p.candidatesOrdering(log, cq.Name))
 }
 
@@ -370,10 +370,11 @@ func (p *Preemptor) IssuePreemptions(
 		workloadevict.ReportPreemption(preemptor.ClusterQueue, target.Reason, target.WorkloadInfo.ClusterQueue, p.roleTracker, p.customLabels)
 		successfullyPreempted.Add(1)
 	})
-	// Later entries of this cycle see these preemptions, as the snapshot doesn't follow the tracker.
+	// limitsSnapshot is not synchronized (scheduling is single-threaded), so update it
+	// after ParallelizeUntil finishes.
 	for i, target := range targets {
 		if recorded[i] {
-			p.preemptionLimits.Record(target.ConfigurablePreemptionReasonData.ConsumedLimits)
+			p.limitsSnapshot.Record(target.ConfigurablePreemptionReasonData.ConsumedLimits)
 		}
 	}
 	return int(successfullyPreempted.Load()), int(preemptionErrors.Load()), errCh.ReceiveError()

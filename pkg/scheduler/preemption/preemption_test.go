@@ -4949,14 +4949,14 @@ func TestIssuePreemptionsRecordsPreemptionLimits(t *testing.T) {
 			); diff != "" {
 				t.Errorf("Unexpected recorded preemptions (-want,+got):\n%s", diff)
 			}
-			// Later entries of the scheduling cycle count the same preemptions.
-			var wantCycleSnapshot *limits.PreemptionLimitsSnapshot
+			// The snapshot is updated with the same preemptions as the tracker.
+			var wantSnapshot *limits.PreemptionLimitsSnapshot
 			if !tc.disableLimits {
-				wantCycleSnapshot = limits.NewPreemptionLimitTracker().Snapshot(now, nil)
-				wantCycleSnapshot.Record(tc.wantRecorded)
+				wantSnapshot = limits.NewPreemptionLimitTracker().Snapshot(now, nil)
+				wantSnapshot.Record(tc.wantRecorded)
 			}
-			if diff := cmp.Diff(wantCycleSnapshot, preemptor.preemptionLimits, cmp.AllowUnexported(limits.PreemptionLimitsSnapshot{})); diff != "" {
-				t.Errorf("Unexpected preemptions counted in the scheduling cycle (-want,+got):\n%s", diff)
+			if diff := cmp.Diff(wantSnapshot, preemptor.limitsSnapshot, cmp.AllowUnexported(limits.PreemptionLimitsSnapshot{})); diff != "" {
+				t.Errorf("Unexpected limits snapshot (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -5428,7 +5428,7 @@ func TestSnapshotPreemptionLimits(t *testing.T) {
 			tracker.Record(now.Add(-30*time.Second), policy.ConsumedLimits{"global": "Global"})
 			preemptor := New(cl, workload.Ordering{}, &utiltesting.EventRecorder{}, nil, false, clocktesting.NewFakeClock(now), nil, preemptexpectations.New(), nil, tracker)
 			// Left over from the previous scheduling cycle.
-			preemptor.preemptionLimits = &limits.PreemptionLimitsSnapshot{}
+			preemptor.limitsSnapshot = &limits.PreemptionLimitsSnapshot{}
 
 			preemptor.SnapshotPreemptionLimits(ctx)
 
@@ -5436,7 +5436,7 @@ func TestSnapshotPreemptionLimits(t *testing.T) {
 			if tc.wantSnapshot {
 				want = tracker.Snapshot(now, []kueuealpha.PreemptionLimit{*global})
 			}
-			if diff := cmp.Diff(want, preemptor.preemptionLimits,
+			if diff := cmp.Diff(want, preemptor.limitsSnapshot,
 				cmp.AllowUnexported(limits.PreemptionLimitsSnapshot{}),
 			); diff != "" {
 				t.Errorf("Unexpected PreemptionLimits snapshot (-want,+got):\n%s", diff)

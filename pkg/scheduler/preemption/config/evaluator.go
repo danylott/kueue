@@ -83,14 +83,14 @@ func NewPreemptionEvaluator(
 }
 
 // NewEvaluatorForPreemptionConfig returns the PreemptionEvaluator of the given preemptor for
-// the PreemptionConfig with the given name, within the PreemptionLimits of the scheduling
-// cycle's snapshot. It returns nil if the PreemptionConfig cannot be read, or if
-// ConfigurablePreemptionLimits is enabled and the PreemptionLimits weren't read or are invalid.
+// the PreemptionConfig with the given name, within the given limitsSnapshot. It returns nil if
+// the PreemptionConfig cannot be read, or if ConfigurablePreemptionLimits is enabled and
+// limitsSnapshot is nil or a PreemptionLimit in it is invalid.
 func NewEvaluatorForPreemptionConfig(
 	ctx context.Context,
 	log logr.Logger,
 	cl client.Client,
-	preemptionLimits *limits.PreemptionLimitsSnapshot,
+	limitsSnapshot *limits.PreemptionLimitsSnapshot,
 	preemptionExpectations *expectations.Store,
 	preemptionConfigName string,
 	preemptor *workload.Info,
@@ -104,12 +104,11 @@ func NewEvaluatorForPreemptionConfig(
 	var preemptionLimiter *limits.PreemptionLimiter
 	if features.Enabled(features.ConfigurablePreemptionLimits) {
 		// Fail closed so preemptions cannot exceed unreadable or invalid limits.
-		// The scheduling cycle logs when the PreemptionLimits couldn't be listed.
-		if preemptionLimits == nil {
+		if limitsSnapshot == nil {
 			return nil
 		}
 		var err error
-		preemptionLimiter, err = limits.NewPreemptionLimiter(log, preemptionLimits, preemptionConfig, preemptionExpectations)
+		preemptionLimiter, err = limits.NewPreemptionLimiter(log, limitsSnapshot, preemptionConfig, preemptionExpectations)
 		if err != nil {
 			log.Error(err, "Invalid PreemptionLimit, skipping configurable preemptions", "preemptionConfigName", preemptionConfigName)
 			return nil
