@@ -33,8 +33,8 @@ import (
 // scheduling cycle.
 type PreemptionLimitsSnapshot struct {
 	// limits are kept in the given order, so that errors are deterministic.
-	limits []*kueuealpha.PreemptionLimit
-	byName map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit
+	limits      []*kueuealpha.PreemptionLimit
+	limitByName map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit
 	// recorded holds the preemptions recorded within the window of each limit when
 	// the snapshot was taken, plus ones added with `Record` method.
 	recorded preemptionCounts
@@ -67,10 +67,10 @@ func (s *PreemptionLimitsSnapshot) WithinLimits(consumedLimits []policy.Consumed
 	return true
 }
 
-// allowance returns the limit minus the preemptions recorded for it in the
-// snapshot, or 0 if the limit is not in the snapshot.
+// allowance returns how many more preemptions are allowed for limit and
+// scopeValue in the snapshot, or 0 if limit is not in the snapshot.
 func (s *PreemptionLimitsSnapshot) allowance(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
-	preemptionLimit, found := s.byName[limit]
+	preemptionLimit, found := s.limitByName[limit]
 	if !found {
 		return 0
 	}

@@ -887,7 +887,7 @@ func (s *Scheduler) updateAssignmentIfNeeded(
 		log.V(2).Info("Re-computing the assignment as preemption targets overlap")
 		revertRemoval = simulateOtherPreemptions(ctx, log, snapshot, preemptedWorkloads)
 	case needsLimitsRecompute:
-		// Unlike the overlap recompute, this one may turn a refilled entry into a Fit on another flavor.
+		// Recomputing may turn a refilled entry into a Fit on another flavor.
 		log.V(2).Info("Re-computing the assignment as preemption targets exceed remaining preemption limits")
 		revertRemoval = simulateOtherPreemptions(ctx, log, snapshot, preemptedWorkloads)
 	case needsTASRecompute:
