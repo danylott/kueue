@@ -540,9 +540,6 @@ func (s *Scheduler) processEntry(
 	// If the workload only fits because of other preemptions in this cycle,
 	// we must wait for those preemptions to complete.
 	if mode == flavorassigner.DeferredFit {
-		if !features.Enabled(features.ConfigurablePreemptionLimits) || e.inadmissibleMsg == "" {
-			e.inadmissibleMsg = "Workload has overlapping preemption targets with another workload, but will fit after these preemptions complete"
-		}
 		e.quotaReservedReason = kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads
 		e.requeueReason = qcache.RequeueReasonPendingPreemption
 		// Clear FlavorScanState to force a full re-evaluation of all flavors in the next cycle.
@@ -899,7 +896,8 @@ func (s *Scheduler) updateAssignmentIfNeeded(
 	// Clear the flavor scan state so that we can start from the first flavor again and
 	// reach all flavors from the nomination.
 	e.FlavorScanState = nil
-	// Leave NominationMapping unset on limits recompute so FlavorAssigner can fall back to another flavor.
+	// NominationMapping skips every flavor except each resource's nominated one, so leave
+	// it unset on limits recompute to allow falling back to another flavor.
 	if !needsLimitsRecompute {
 		e.NominationMapping = e.readResourceToFlavorMapping()
 	}
@@ -911,12 +909,13 @@ func (s *Scheduler) updateAssignmentIfNeeded(
 		}
 		if e.assignment.RepresentativeMode() == flavorassigner.Fit {
 			e.assignment.SetRepresentativeMode(flavorassigner.DeferredFit)
+			e.inadmissibleMsg = "Workload has overlapping preemption targets with another workload, but will fit after these preemptions complete"
 		}
 	}
 	if needsLimitsRecompute {
 		revertRemoval()
-		// Defer a Fit only when it depends on earlier preemptions completing;
-		// a limits recompute may fit right away on another flavor.
+		// The recomputed Fit assumed earlier preemptions completed. Defer it unless the
+		// assignment already fits (quota and TAS capacity) while those victims still run.
 		if e.assignment.RepresentativeMode() == flavorassigner.Fit &&
 			e.checkFits(log, snapshot, cq, nil) != schdcache.FitsCheckOk {
 			e.assignment.SetRepresentativeMode(flavorassigner.DeferredFit)

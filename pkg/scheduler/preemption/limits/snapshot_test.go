@@ -174,57 +174,58 @@ func TestPreemptionLimitsSnapshotWithinLimits(t *testing.T) {
 		// recorded are the preemptions recorded in the snapshot after it was taken.
 		recorded         []policy.ConsumedLimits
 		nilSnapshot      bool
-		consumedLimits   []policy.ConsumedLimits
+		preemptions      []policy.ConsumedLimits
 		wantWithinLimits bool
 	}{
 		"preemptions within the remaining limit are allowed": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"per-cq": {"cq-a": {now.Add(-30 * time.Second)}},
 			},
-			consumedLimits:   []policy.ConsumedLimits{{"per-cq": "cq-a"}},
+			preemptions:      []policy.ConsumedLimits{{"per-cq": "cq-a"}},
 			wantWithinLimits: true,
 		},
 		"preemptions together exceeding the remaining limit are blocked": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"per-cq": {"cq-a": {now.Add(-30 * time.Second)}},
 			},
-			consumedLimits:   []policy.ConsumedLimits{{"per-cq": "cq-a"}, {"per-cq": "cq-a"}},
+			preemptions:      []policy.ConsumedLimits{{"per-cq": "cq-a"}, {"per-cq": "cq-a"}},
 			wantWithinLimits: false,
 		},
 		"preemptions recorded in the snapshot are counted against the limit": {
 			recorded:         []policy.ConsumedLimits{{"per-cq": "cq-a"}, {"per-cq": "cq-a"}},
-			consumedLimits:   []policy.ConsumedLimits{{"per-cq": "cq-a"}},
+			preemptions:      []policy.ConsumedLimits{{"per-cq": "cq-a"}},
 			wantWithinLimits: false,
 		},
 		"different scope values are counted independently": {
 			recorded:         []policy.ConsumedLimits{{"per-cq": "cq-a"}},
-			consumedLimits:   []policy.ConsumedLimits{{"per-cq": "cq-b"}, {"per-cq": "cq-b"}, {"per-cq": "cq-a"}},
+			preemptions:      []policy.ConsumedLimits{{"per-cq": "cq-b"}, {"per-cq": "cq-b"}, {"per-cq": "cq-a"}},
 			wantWithinLimits: true,
 		},
 		"preemption is blocked when any of its consumed limits is exhausted": {
 			recorded:         []policy.ConsumedLimits{{"global": "Global"}, {"global": "Global"}},
-			consumedLimits:   []policy.ConsumedLimits{{"per-cq": "cq-a", "global": "Global"}},
+			preemptions:      []policy.ConsumedLimits{{"per-cq": "cq-a", "global": "Global"}},
 			wantWithinLimits: false,
 		},
 		"preemption consuming a limit missing from the snapshot is blocked": {
-			consumedLimits:   []policy.ConsumedLimits{{"missing": "Global"}},
+			preemptions:      []policy.ConsumedLimits{{"missing": "Global"}},
 			wantWithinLimits: false,
 		},
 		"preemption is blocked when the snapshot is nil": {
 			nilSnapshot:      true,
-			consumedLimits:   []policy.ConsumedLimits{{"per-cq": "cq-a"}},
+			preemptions:      []policy.ConsumedLimits{{"per-cq": "cq-a"}},
 			wantWithinLimits: false,
 		},
 		"preemption consuming no limits is blocked when the snapshot is nil": {
 			nilSnapshot:      true,
-			consumedLimits:   []policy.ConsumedLimits{{}},
+			preemptions:      []policy.ConsumedLimits{{}},
 			wantWithinLimits: false,
 		},
-		"empty consumed limits are allowed when the snapshot is nil": {
+		// True when there are no preemptions to block.
+		"zero preemptions are allowed when the snapshot is nil": {
 			nilSnapshot:      true,
 			wantWithinLimits: true,
 		},
-		"empty consumed limits are allowed": {
+		"zero preemptions are allowed": {
 			wantWithinLimits: true,
 		},
 	}
@@ -241,8 +242,8 @@ func TestPreemptionLimitsSnapshotWithinLimits(t *testing.T) {
 			if tc.nilSnapshot {
 				snapshot = nil
 			}
-			if got := snapshot.WithinLimits(tc.consumedLimits); got != tc.wantWithinLimits {
-				t.Errorf("WithinLimits(%v) = %v, want %v", tc.consumedLimits, got, tc.wantWithinLimits)
+			if got := snapshot.WithinLimits(tc.preemptions); got != tc.wantWithinLimits {
+				t.Errorf("WithinLimits(%v) = %v, want %v", tc.preemptions, got, tc.wantWithinLimits)
 			}
 		})
 	}

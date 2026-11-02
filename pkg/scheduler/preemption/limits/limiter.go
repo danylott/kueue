@@ -48,13 +48,13 @@ func NewPreemptionLimiter(
 	preemptionExpectations *expectations.Store,
 ) (*PreemptionLimiter, error) {
 	matchers := make(map[policy.PreemptionLimitReference]*preemptionLimitMatcher)
-	for _, limit := range snapshot.limits {
+	for ref, limit := range snapshot.limitByName {
 		matcher, err := newPreemptionLimitMatcher(limit, config)
 		if err != nil {
 			return nil, err
 		}
 		if matcher != nil {
-			matchers[policy.PreemptionLimitReference(limit.Name)] = matcher
+			matchers[ref] = matcher
 		}
 	}
 	return &PreemptionLimiter{

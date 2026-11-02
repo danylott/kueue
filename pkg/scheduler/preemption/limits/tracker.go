@@ -110,7 +110,7 @@ func (t *PreemptionLimitTracker) Snapshot(now time.Time, preemptionLimits []kueu
 		limits[i] = &preemptionLimits[i]
 		limitByName[policy.PreemptionLimitReference(preemptionLimits[i].Name)] = &preemptionLimits[i]
 	}
-	return &PreemptionLimitsSnapshot{limits: limits, limitByName: limitByName, recorded: t.Counts(now, limits)}
+	return &PreemptionLimitsSnapshot{limitByName: limitByName, recorded: t.Counts(now, limits)}
 }
 
 // Counts returns a consistent snapshot of the preemptions recorded for limits
