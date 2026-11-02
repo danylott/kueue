@@ -896,7 +896,7 @@ func (s *Scheduler) updateAssignmentIfNeeded(
 	// Clear the flavor scan state so that we can start from the first flavor again and
 	// reach all flavors from the nomination.
 	e.FlavorScanState = nil
-	// NominationMapping skips every flavor except each resource's nominated one, so leave
+	// NominationMapping skips flavors that were not picked during nomination, so leave
 	// it unset on limits recompute to allow falling back to another flavor.
 	if !needsLimitsRecompute {
 		e.NominationMapping = e.readResourceToFlavorMapping()
