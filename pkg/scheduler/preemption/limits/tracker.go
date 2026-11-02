@@ -18,6 +18,7 @@ package limits
 
 import (
 	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -54,10 +55,10 @@ func (e events) insert(ts time.Time) events {
 	return slices.Insert(e, i, ts)
 }
 
-// countSince returns the number of events at or after cutoff.
-func (e events) countSince(cutoff time.Time) int {
-	i, _ := slices.BinarySearchFunc(e, cutoff, time.Time.Compare) // first event >= cutoff
-	return len(e) - i
+// after returns the events strictly after cutoff. The result shares e's backing array.
+func (e events) after(cutoff time.Time) events {
+	i := sort.Search(len(e), func(i int) bool { return e[i].After(cutoff) })
+	return e[i:]
 }
 
 // pruneBefore reslices e to drop events before cutoff without copying. Dropped
@@ -65,6 +66,18 @@ func (e events) countSince(cutoff time.Time) int {
 func (e events) pruneBefore(cutoff time.Time) events {
 	i, _ := slices.BinarySearchFunc(e, cutoff, time.Time.Compare) // first event >= cutoff
 	return e[i:]
+}
+
+// recordEvents inserts ts for every limit and scope value in consumedLimits.
+func recordEvents(byLimit map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events, ts time.Time, consumedLimits policy.ConsumedLimits) {
+	for limit, scopeValue := range consumedLimits {
+		scopes, found := byLimit[limit]
+		if !found {
+			scopes = make(map[policy.PreemptionLimitScopeValue]events)
+			byLimit[limit] = scopes
+		}
+		scopes[scopeValue] = scopes[scopeValue].insert(ts)
+	}
 }
 
 // PreemptionLimitTracker records the timestamps of confirmed configurable preemptions for
@@ -86,23 +99,16 @@ func NewPreemptionLimitTracker() *PreemptionLimitTracker {
 func (t *PreemptionLimitTracker) Record(ts time.Time, consumedLimits policy.ConsumedLimits) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for limit, scopeValue := range consumedLimits {
-		scopes, found := t.events[limit]
-		if !found {
-			scopes = make(map[policy.PreemptionLimitScopeValue]events)
-			t.events[limit] = scopes
-		}
-		scopes[scopeValue] = scopes[scopeValue].insert(ts)
-	}
+	recordEvents(t.events, ts, consumedLimits)
 }
 
-// windowStart returns the start of the window of limit ending at now.
+// windowStart returns the exclusive start of the window of limit ending at now.
 func windowStart(now time.Time, limit *kueuealpha.PreemptionLimit) time.Time {
 	return now.Add(-time.Duration(limit.Spec.LimitWindowSeconds) * time.Second)
 }
 
 // Snapshot returns a snapshot of preemptionLimits with the preemptions recorded
-// within their windows ending at now. The caller must not modify preemptionLimits.
+// within their windows (windowStart, now]. The caller must not modify preemptionLimits.
 func (t *PreemptionLimitTracker) Snapshot(now time.Time, preemptionLimits []kueuealpha.PreemptionLimit) *PreemptionLimitsSnapshot {
 	limits := make([]*kueuealpha.PreemptionLimit, len(preemptionLimits))
 	byName := make(map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit, len(preemptionLimits))
@@ -110,11 +116,26 @@ func (t *PreemptionLimitTracker) Snapshot(now time.Time, preemptionLimits []kueu
 		limits[i] = &preemptionLimits[i]
 		byName[policy.PreemptionLimitReference(preemptionLimits[i].Name)] = &preemptionLimits[i]
 	}
-	return &PreemptionLimitsSnapshot{limits: limits, byName: byName, recorded: t.Counts(now, limits)}
+	snapshotEvents := make(map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events, len(limits))
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, limit := range limits {
+		ref := policy.PreemptionLimitReference(limit.Name)
+		cutoff := windowStart(now, limit)
+		for scopeValue, e := range t.events[ref] {
+			if inWindow := e.after(cutoff); len(inWindow) > 0 {
+				if snapshotEvents[ref] == nil {
+					snapshotEvents[ref] = make(map[policy.PreemptionLimitScopeValue]events)
+				}
+				snapshotEvents[ref][scopeValue] = slices.Clone(inWindow)
+			}
+		}
+	}
+	return &PreemptionLimitsSnapshot{limits: limits, byName: byName, events: snapshotEvents}
 }
 
 // Counts returns a consistent snapshot of the preemptions recorded for limits
-// within their windows [windowStart, now]. Scope values with 0 events are omitted.
+// within their windows (windowStart, now]. Scope values with 0 events are omitted.
 func (t *PreemptionLimitTracker) Counts(now time.Time, limits []*kueuealpha.PreemptionLimit) preemptionCounts {
 	counts := make(preemptionCounts, len(limits))
 	t.mu.RLock()
@@ -123,7 +144,7 @@ func (t *PreemptionLimitTracker) Counts(now time.Time, limits []*kueuealpha.Pree
 		ref := policy.PreemptionLimitReference(limit.Name)
 		cutoff := windowStart(now, limit)
 		for scopeValue, e := range t.events[ref] {
-			if count := e.countSince(cutoff); count > 0 {
+			if count := len(e.after(cutoff)); count > 0 {
 				counts.add(ref, scopeValue, int32(count))
 			}
 		}

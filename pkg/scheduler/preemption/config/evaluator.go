@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +39,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/config/filters"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/limits"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
+	cmputil "sigs.k8s.io/kueue/pkg/util/cmp"
 	"sigs.k8s.io/kueue/pkg/util/expectations"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
@@ -59,6 +61,7 @@ type PreemptionEvaluator struct {
 	// preemptionLimiter enforces the PreemptionLimits applying to the PreemptionConfig.
 	// It is nil when the ConfigurablePreemptionLimits feature is disabled.
 	preemptionLimiter *limits.PreemptionLimiter
+	retryAt           *time.Time
 }
 
 // NewPreemptionEvaluator returns the PreemptionEvaluator of the given preemptor for the
@@ -125,6 +128,15 @@ func (p *PreemptionEvaluator) HasRules() bool {
 		p.hasRulesFor(kueuealpha.Always, kueuealpha.InsufficientQuota, kueuealpha.QuotaFeasibleAndInsufficientTopology)
 }
 
+// RetryAt returns the earliest time a candidate skipped so far may become eligible,
+// or nil if waiting alone would not make any eligible.
+func (p *PreemptionEvaluator) RetryAt() *time.Time {
+	if p == nil {
+		return nil
+	}
+	return p.retryAt
+}
+
 // FindCandidates evaluates candidates across applicable PreemptionConfig
 // triggers and yields them.
 // Returns (interrupted = true) if at any point the yield method returns false.
@@ -154,6 +166,9 @@ func (p *PreemptionEvaluator) FindCandidates(
 	}
 
 	budget := p.preemptionLimiter.NewBudget()
+	defer func() {
+		p.retryAt = cmputil.EarliestTime(p.retryAt, budget.RetryAt())
+	}()
 	candidates, err := p.orderedCandidates(snapshot, frsNeedPreemption, kueuealpha.Always)
 	if err != nil {
 		return

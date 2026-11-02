@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -51,6 +52,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/fairsharing"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/limits"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
+	cmputil "sigs.k8s.io/kueue/pkg/util/cmp"
 	"sigs.k8s.io/kueue/pkg/util/expectations"
 	"sigs.k8s.io/kueue/pkg/util/logging"
 	"sigs.k8s.io/kueue/pkg/util/priority"
@@ -79,6 +81,8 @@ type Preemptor struct {
 	preemptionLimitTracker *limits.PreemptionLimitTracker
 	// limitsSnapshot holds the PreemptionLimits enforced in the current scheduling cycle.
 	limitsSnapshot *limits.PreemptionLimitsSnapshot
+	// retryAt is unsynchronized: scheduling is single-threaded.
+	retryAt *time.Time
 }
 
 // PreemptionStrategy represents a singular set of ordered potential preemption candidates.
@@ -249,6 +253,14 @@ func (p *Preemptor) WithinPreemptionLimits(targets []*Target) bool {
 	return p.limitsSnapshot.WithinLimits(consumedLimits)
 }
 
+// TakeRetryAt returns and clears the earliest retry timestamp accumulated across
+// failed candidate searches.
+func (p *Preemptor) TakeRetryAt() *time.Time {
+	retryAt := p.retryAt
+	p.retryAt = nil
+	return retryAt
+}
+
 // Resolved once per attempt: both algorithms evaluate several triggers, and the
 // PreemptionConfig must not be re-read for each of them.
 // Returns nil if the ConfigurablePreemptions feature is disabled, or the ClusterQueue
@@ -319,8 +331,8 @@ func (p *Preemptor) IssuePreemptions(
 	ctx, cancel := context.WithCancel(ctx)
 	var successfullyPreempted atomic.Int64
 	var preemptionErrors atomic.Int64
-	// recorded marks the targets whose preemption counts against PreemptionLimits.
-	recorded := make([]bool, len(targets))
+	// recordedAt holds the timestamp recorded for each target whose preemption counts against PreemptionLimits.
+	recordedAt := make([]*time.Time, len(targets))
 	defer cancel()
 	workqueue.ParallelizeUntil(ctx, parallelPreemptions, len(targets), func(i int) {
 		target := targets[i]
@@ -362,8 +374,9 @@ func (p *Preemptor) IssuePreemptions(
 			return
 		}
 		if features.Enabled(features.ConfigurablePreemptionLimits) && target.ConfigurablePreemptionReasonData != nil {
-			p.preemptionLimitTracker.Record(p.clock.Now(), target.ConfigurablePreemptionReasonData.ConsumedLimits)
-			recorded[i] = true
+			ts := p.clock.Now()
+			p.preemptionLimitTracker.Record(ts, target.ConfigurablePreemptionReasonData.ConsumedLimits)
+			recordedAt[i] = &ts
 		}
 		preemptorEffPri, preemptorBase, preemptorBoost := priorityInfo(log, preemptor.Obj)
 		targetEffPri, targetBase, targetBoost := priorityInfo(log, target.WorkloadInfo.Obj)
@@ -385,8 +398,8 @@ func (p *Preemptor) IssuePreemptions(
 	// limitsSnapshot is not synchronized (scheduling is single-threaded), so update it
 	// after ParallelizeUntil finishes.
 	for i, target := range targets {
-		if recorded[i] {
-			p.limitsSnapshot.Record(target.ConfigurablePreemptionReasonData.ConsumedLimits)
+		if recordedAt[i] != nil {
+			p.limitsSnapshot.Record(*recordedAt[i], target.ConfigurablePreemptionReasonData.ConsumedLimits)
 		}
 	}
 	return int(successfullyPreempted.Load()), int(preemptionErrors.Load()), errCh.ReceiveError()
@@ -430,6 +443,7 @@ type preemptionAttemptOpts struct {
 // fits.
 func (p *Preemptor) getTargets(ctx context.Context, strategies iter.Seq[PreemptionStrategy]) []*Target {
 	log := log.FromContext(ctx)
+	var retryAt *time.Time
 	for strategy := range strategies {
 		var targets []*Target
 		for candidate := range strategy.candidates {
@@ -457,7 +471,9 @@ func (p *Preemptor) getTargets(ctx context.Context, strategies iter.Seq[Preempti
 			}
 		}
 		restoreSnapshot(strategy.pCtx.snapshot, targets)
+		retryAt = cmputil.EarliestTime(retryAt, strategy.pCtx.configurableEvaluator.RetryAt())
 	}
+	p.retryAt = cmputil.EarliestTime(p.retryAt, retryAt)
 	if logV := log.V(6); logV.Enabled() {
 		logV.Info("All preemption strategies failed")
 	}
