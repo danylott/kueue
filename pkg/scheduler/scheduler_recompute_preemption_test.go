@@ -166,7 +166,7 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 	const sliceDeferredMsg = "Workload has overlapping preemption targets with another workload, but will fit after these preemptions complete"
 
 	// Shared setup for PreemptionLimit cases: p1 (cq-p1, cfg-one) is older than p2 (cq-p2, cfg-two),
-	// so it preempts first. Each config selects victims with its "group" label from borrowing cq-v and cq-w.
+	// so it preempts first. Each config selects candidates with its "group" label from borrowing cq-v and cq-w.
 	cqP1 := *utiltestingapi.MakeClusterQueue("cq-p1").
 		Cohort("limits-cohort").
 		ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").
@@ -227,16 +227,13 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 				Assignment(corev1.ResourceCPU, flavor, cpu).Obj()).
 			Obj()
 	}
-	limitsAdmission := func(cq kueue.ClusterQueueReference, flavor kueue.ResourceFlavorReference) *kueue.Admission {
-		return cpuAdmission(cq, flavor, "1")
-	}
-	limitsVictim := func(name string, lq kueue.LocalQueueName, cq kueue.ClusterQueueReference, group string) *utiltestingapi.WorkloadWrapper {
+	limitsCandidate := func(name string, lq kueue.LocalQueueName, cq kueue.ClusterQueueReference, group string) *utiltestingapi.WorkloadWrapper {
 		return utiltestingapi.MakeWorkload(name, "default").
 			UID(types.UID(name)).
 			Queue(lq).
 			Label("group", group).
 			Request(corev1.ResourceCPU, "1").
-			ReserveQuotaAt(limitsAdmission(cq, "default"), now).
+			ReserveQuotaAt(cpuAdmission(cq, "default", "1"), now).
 			AdmittedAt(true, now)
 	}
 	limitsPreemptor := func(name string, lq kueue.LocalQueueName, creation time.Time) *utiltestingapi.WorkloadWrapper {
@@ -246,7 +243,7 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 			Request(corev1.ResourceCPU, "1").
 			Creation(creation)
 	}
-	// preemptedBy sets the status of a victim preempted by preemptor through the rule of config for group.
+	// preemptedBy sets the status of a candidate preempted by preemptor through the rule of config for group.
 	preemptedBy := func(w *utiltestingapi.WorkloadWrapper, preemptor, config, group string) *utiltestingapi.WorkloadWrapper {
 		msg := fmt.Sprintf("Preempted by default/%s because of preemption config %s rule rule-%s/0", preemptor, config, group)
 		return w.
@@ -311,14 +308,14 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 			}).
 			Admission(admission)
 	}
-	// largeV1 is v1 with 2 CPUs, so that preempting it frees 1 CPU more than p1 takes.
-	largeV1 := func() *utiltestingapi.WorkloadWrapper {
-		return utiltestingapi.MakeWorkload("v1", "default").
-			UID("v1").
-			Queue("lq-v").
-			Label("group", "one").
+	// largeCandidate is a 2-CPU candidate, freeing 1 CPU more than a 1-CPU preemptor takes.
+	largeCandidate := func(name string, lq kueue.LocalQueueName, cq kueue.ClusterQueueReference, group string) *utiltestingapi.WorkloadWrapper {
+		return utiltestingapi.MakeWorkload(name, "default").
+			UID(types.UID(name)).
+			Queue(lq).
+			Label("group", group).
 			Request(corev1.ResourceCPU, "2").
-			ReserveQuotaAt(cpuAdmission("cq-v", "default", "2"), now).
+			ReserveQuotaAt(cpuAdmission(cq, "default", "2"), now).
 			AdmittedAt(true, now)
 	}
 	const (
@@ -2394,7 +2391,7 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 		},
 		// p2 nominates v2 (lower priority than v3), but p1's preemption of v1 uses up cq-v's
 		// limit, so p2 recomputes and preempts v3 in cq-w instead.
-		"preemption limits: recompute selects a victim in another ClusterQueue after an earlier preemption exhausts the limit": {
+		"preemption limits: recompute selects a candidate in another ClusterQueue after an earlier preemption exhausts the limit": {
 			featureGates:            limitsFeatureGates,
 			additionalClusterQueues: limitsClusterQueues,
 			additionalLocalQueues:   limitsLocalQueues,
@@ -2402,21 +2399,21 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 			workloads: []kueue.Workload{
 				*limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)).Obj(),
 				*limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)).Obj(),
-				*limitsVictim("v1", "lq-v", "cq-v", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
-				*limitsVictim("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
+				*limitsCandidate("v1", "lq-v", "cq-v", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
+				*limitsCandidate("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
 			},
 			wantWorkloads: []kueue.Workload{
 				*pending(limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsPendingPreemptionMsg).Obj(),
 				*pending(limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsPendingPreemptionMsg).Obj(),
-				*preemptedBy(limitsVictim("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
-				*preemptedBy(limitsVictim("v3", "lq-w", "cq-w", "two").Priority(1), "p2", "cfg-two", "two").Obj(),
+				*preemptedBy(limitsCandidate("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
+				*preemptedBy(limitsCandidate("v3", "lq-w", "cq-w", "two").Priority(1), "p2", "cfg-two", "two").Obj(),
 			},
 			wantAssignments: map[workload.Reference]kueue.Admission{
-				"default/v1": *limitsAdmission("cq-v", "default"),
-				"default/v2": *limitsAdmission("cq-v", "default"),
-				"default/v3": *limitsAdmission("cq-w", "default"),
+				"default/v1": *cpuAdmission("cq-v", "default", "1"),
+				"default/v2": *cpuAdmission("cq-v", "default", "1"),
+				"default/v3": *cpuAdmission("cq-w", "default", "1"),
 			},
 			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq-p1": {"default/p1"},
@@ -2440,21 +2437,21 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 			workloads: []kueue.Workload{
 				*limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)).Obj(),
 				*limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)).Obj(),
-				*limitsVictim("v1", "lq-v", "cq-v", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
-				*limitsVictim("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
+				*limitsCandidate("v1", "lq-v", "cq-v", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
+				*limitsCandidate("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
 			},
 			wantWorkloads: []kueue.Workload{
 				*pending(limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsPendingPreemptionMsg).Obj(),
 				*pending(limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForQuota, limitsInsufficientQuotaMsg).Obj(),
-				*preemptedBy(limitsVictim("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
-				*limitsVictim("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
+				*preemptedBy(limitsCandidate("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
+				*limitsCandidate("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
 			},
 			wantAssignments: map[workload.Reference]kueue.Admission{
-				"default/v1": *limitsAdmission("cq-v", "default"),
-				"default/v2": *limitsAdmission("cq-v", "default"),
-				"default/v3": *limitsAdmission("cq-w", "default"),
+				"default/v1": *cpuAdmission("cq-v", "default", "1"),
+				"default/v2": *cpuAdmission("cq-v", "default", "1"),
+				"default/v3": *cpuAdmission("cq-w", "default", "1"),
 			},
 			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq-p1": {"default/p1"},
@@ -2476,46 +2473,56 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 			workloads: []kueue.Workload{
 				*limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)).Obj(),
 				*limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)).Obj(),
-				*limitsVictim("v1", "lq-v", "cq-v", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
+				*limitsCandidate("v1", "lq-v", "cq-v", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
 			},
 			wantWorkloads: []kueue.Workload{
 				*pending(limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsPendingPreemptionMsg).Obj(),
-				*admitted(limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)), limitsAdmission("cq-p2", "on-demand")).Obj(),
-				*preemptedBy(limitsVictim("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
+				*admitted(limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)), cpuAdmission("cq-p2", "on-demand", "1")).Obj(),
+				*preemptedBy(limitsCandidate("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
 			},
 			wantAssignments: map[workload.Reference]kueue.Admission{
-				"default/p2": *limitsAdmission("cq-p2", "on-demand"),
-				"default/v1": *limitsAdmission("cq-v", "default"),
-				"default/v2": *limitsAdmission("cq-v", "default"),
+				"default/p2": *cpuAdmission("cq-p2", "on-demand", "1"),
+				"default/v1": *cpuAdmission("cq-v", "default", "1"),
+				"default/v2": *cpuAdmission("cq-v", "default", "1"),
 			},
 			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq-p1": {"default/p1"},
 			},
 		},
 		// v1 frees 2 CPUs while p1 needs 1. After p1 uses up cq-v's limit, p2 can't preempt v2,
-		// so it waits to fit once v1 finishes terminating.
+		// so it waits to fit once v1 finishes terminating rather than switching to v3 in cq-w.
 		"preemption limits: recompute defers a workload that fits only after earlier preemptions complete": {
-			featureGates:            limitsFeatureGates,
-			additionalClusterQueues: limitsClusterQueues,
-			additionalLocalQueues:   limitsLocalQueues,
-			objects:                 []client.Object{groupConfig("cfg-one", "one"), groupConfig("cfg-two", "two"), perPreemptedCQLimit.Clone().Obj()},
+			featureGates: limitsFeatureGates,
+			additionalClusterQueues: []kueue.ClusterQueue{
+				cqP1, cqV, cqW,
+				*utiltestingapi.MakeClusterQueue("cq-p2").
+					Cohort("limits-cohort").
+					ResourceGroup(*utiltestingapi.MakeFlavorQuotas("default").Resource(corev1.ResourceCPU, "4").Obj()).
+					Annotation(kueuealpha.PreemptionConfigNameAnnotation, "cfg-two").
+					Obj(),
+			},
+			additionalLocalQueues: limitsLocalQueues,
+			objects:               []client.Object{groupConfig("cfg-one", "one"), groupConfig("cfg-two", "two"), perPreemptedCQLimit.Clone().Obj()},
 			workloads: []kueue.Workload{
 				*limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)).Obj(),
 				*limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)).Obj(),
-				*largeV1().Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
+				*largeCandidate("v1", "lq-v", "cq-v", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
+				*largeCandidate("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
 			},
 			wantWorkloads: []kueue.Workload{
 				*pending(limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsPendingPreemptionMsg).Obj(),
 				*pending(limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsDeferredFitMsg).Obj(),
-				*preemptedBy(largeV1(), "p1", "cfg-one", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
+				*preemptedBy(largeCandidate("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
+				*largeCandidate("v3", "lq-w", "cq-w", "two").Priority(1).Obj(),
 			},
 			wantAssignments: map[workload.Reference]kueue.Admission{
 				"default/v1": *cpuAdmission("cq-v", "default", "2"),
-				"default/v2": *limitsAdmission("cq-v", "default"),
+				"default/v2": *cpuAdmission("cq-v", "default", "1"),
+				"default/v3": *cpuAdmission("cq-w", "default", "2"),
 			},
 			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq-p1": {"default/p1"},
@@ -2532,19 +2539,19 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 			workloads: []kueue.Workload{
 				*limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)).Obj(),
 				*limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)).Obj(),
-				*limitsVictim("v1", "lq-v", "cq-v", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "one").Priority(1).Obj(),
+				*limitsCandidate("v1", "lq-v", "cq-v", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "one").Priority(1).Obj(),
 			},
 			wantWorkloads: []kueue.Workload{
 				*pending(limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsPendingPreemptionMsg).Obj(),
 				*pending(limitsPreemptor("p2", "lq-p2", now.Add(-time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForQuota,
 					limitsInsufficientQuotaMsg+", skipping flavor on-demand as it is not found in the nomination mapping for resource cpu").Obj(),
-				*preemptedBy(limitsVictim("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "one").Priority(1).Obj(),
+				*preemptedBy(limitsCandidate("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "one").Priority(1).Obj(),
 			},
 			wantAssignments: map[workload.Reference]kueue.Admission{
-				"default/v1": *limitsAdmission("cq-v", "default"),
-				"default/v2": *limitsAdmission("cq-v", "default"),
+				"default/v1": *cpuAdmission("cq-v", "default", "1"),
+				"default/v2": *cpuAdmission("cq-v", "default", "1"),
 			},
 			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq-p1": {"default/p1"},
@@ -2575,21 +2582,21 @@ func TestScheduleRecomputePreemptionTargets(t *testing.T) {
 				*limitsPreemptor("e0", "lq-p2", now.Add(-3*time.Minute)).Request(corev1.ResourceCPU, "2").Obj(),
 				*limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)).Obj(),
 				*limitsPreemptor("refilled", "lq-p2", now.Add(-time.Minute)).Obj(),
-				*limitsVictim("v1", "lq-v", "cq-v", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
+				*limitsCandidate("v1", "lq-v", "cq-v", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
 			},
 			wantWorkloads: []kueue.Workload{
 				*admitted(limitsPreemptor("e0", "lq-p2", now.Add(-3*time.Minute)).Request(corev1.ResourceCPU, "2"), cpuAdmission("cq-p2", "on-demand", "2")).Obj(),
 				*pending(limitsPreemptor("p1", "lq-p1", now.Add(-2*time.Minute)), kueue.WorkloadQuotaReservedReasonWaitingForPreemptedWorkloads, limitsPendingPreemptionMsg).Obj(),
-				*admitted(limitsPreemptor("refilled", "lq-p2", now.Add(-time.Minute)), limitsAdmission("cq-p2", "on-demand")).Obj(),
-				*preemptedBy(limitsVictim("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
-				*limitsVictim("v2", "lq-v", "cq-v", "two").Obj(),
+				*admitted(limitsPreemptor("refilled", "lq-p2", now.Add(-time.Minute)), cpuAdmission("cq-p2", "on-demand", "1")).Obj(),
+				*preemptedBy(limitsCandidate("v1", "lq-v", "cq-v", "one"), "p1", "cfg-one", "one").Obj(),
+				*limitsCandidate("v2", "lq-v", "cq-v", "two").Obj(),
 			},
 			wantAssignments: map[workload.Reference]kueue.Admission{
 				"default/e0":       *cpuAdmission("cq-p2", "on-demand", "2"),
-				"default/refilled": *limitsAdmission("cq-p2", "on-demand"),
-				"default/v1":       *limitsAdmission("cq-v", "default"),
-				"default/v2":       *limitsAdmission("cq-v", "default"),
+				"default/refilled": *cpuAdmission("cq-p2", "on-demand", "1"),
+				"default/v1":       *cpuAdmission("cq-v", "default", "1"),
+				"default/v2":       *cpuAdmission("cq-v", "default", "1"),
 			},
 			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq-p1": {"default/p1"},

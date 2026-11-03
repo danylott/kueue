@@ -34,9 +34,7 @@ import (
 // was captured, for example to track preemptions already issued in the same
 // scheduling cycle.
 type PreemptionLimitsSnapshot struct {
-	// limits are kept in the given order, so that errors are deterministic.
-	limits []*kueuealpha.PreemptionLimit
-	byName map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit
+	limitByName map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit
 	// events holds the preemption timestamps within the window of each limit when
 	// the snapshot was taken, plus ones added via Record.
 	events map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events
@@ -48,16 +46,15 @@ func (s *PreemptionLimitsSnapshot) Record(ts time.Time, consumedLimits policy.Co
 	recordEvents(s.events, ts, consumedLimits)
 }
 
-// WithinLimits reports whether all preemptions in consumedLimits fit together
-// within the remaining limits in the snapshot. A nil PreemptionLimitsSnapshot
-// allows no preemptions.
-func (s *PreemptionLimitsSnapshot) WithinLimits(consumedLimits []policy.ConsumedLimits) bool {
+// WithinLimits reports whether preemptions fit together within the remaining
+// limits in the snapshot. A nil PreemptionLimitsSnapshot allows no preemptions.
+func (s *PreemptionLimitsSnapshot) WithinLimits(preemptions []policy.ConsumedLimits) bool {
 	if s == nil {
-		return len(consumedLimits) == 0
+		return len(preemptions) == 0
 	}
 	taken := preemptionCounts{}
-	for _, consumed := range consumedLimits {
-		for limit, scopeValue := range consumed {
+	for _, consumedLimits := range preemptions {
+		for limit, scopeValue := range consumedLimits {
 			taken.add(limit, scopeValue, 1)
 			if taken[limit][scopeValue] > s.allowance(limit, scopeValue) {
 				return false
@@ -67,10 +64,10 @@ func (s *PreemptionLimitsSnapshot) WithinLimits(consumedLimits []policy.Consumed
 	return true
 }
 
-// allowance returns the limit minus the preemptions recorded for it in the
-// snapshot, or 0 if the limit is not in the snapshot.
+// allowance returns how many more preemptions are allowed for limit and
+// scopeValue in the snapshot, or 0 if limit is not in the snapshot.
 func (s *PreemptionLimitsSnapshot) allowance(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue) int32 {
-	preemptionLimit, found := s.byName[limit]
+	preemptionLimit, found := s.limitByName[limit]
 	if !found {
 		return 0
 	}
@@ -80,7 +77,7 @@ func (s *PreemptionLimitsSnapshot) allowance(limit policy.PreemptionLimitReferen
 // nextSlotTime returns when count more preemptions fit within limit for scopeValue,
 // or nil if waiting alone never makes room. count must exceed the current allowance.
 func (s *PreemptionLimitsSnapshot) nextSlotTime(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue, count int32) *time.Time {
-	preemptionLimit, found := s.byName[limit]
+	preemptionLimit, found := s.limitByName[limit]
 	if !found || count > preemptionLimit.Spec.Limit {
 		return nil
 	}

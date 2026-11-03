@@ -110,17 +110,14 @@ func windowStart(now time.Time, limit *kueuealpha.PreemptionLimit) time.Time {
 // Snapshot returns a snapshot of preemptionLimits with the preemptions recorded
 // within their windows (windowStart, now]. The caller must not modify preemptionLimits.
 func (t *PreemptionLimitTracker) Snapshot(now time.Time, preemptionLimits []kueuealpha.PreemptionLimit) *PreemptionLimitsSnapshot {
-	limits := make([]*kueuealpha.PreemptionLimit, len(preemptionLimits))
-	byName := make(map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit, len(preemptionLimits))
+	limitByName := make(map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit, len(preemptionLimits))
 	for i := range preemptionLimits {
-		limits[i] = &preemptionLimits[i]
-		byName[policy.PreemptionLimitReference(preemptionLimits[i].Name)] = &preemptionLimits[i]
+		limitByName[policy.PreemptionLimitReference(preemptionLimits[i].Name)] = &preemptionLimits[i]
 	}
-	snapshotEvents := make(map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events, len(limits))
+	snapshotEvents := make(map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events, len(limitByName))
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for _, limit := range limits {
-		ref := policy.PreemptionLimitReference(limit.Name)
+	for ref, limit := range limitByName {
 		cutoff := windowStart(now, limit)
 		for scopeValue, e := range t.events[ref] {
 			if inWindow := e.after(cutoff); len(inWindow) > 0 {
@@ -131,7 +128,7 @@ func (t *PreemptionLimitTracker) Snapshot(now time.Time, preemptionLimits []kueu
 			}
 		}
 	}
-	return &PreemptionLimitsSnapshot{limits: limits, byName: byName, events: snapshotEvents}
+	return &PreemptionLimitsSnapshot{limitByName: limitByName, events: snapshotEvents}
 }
 
 // Counts returns a consistent snapshot of the preemptions recorded for limits

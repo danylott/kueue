@@ -244,13 +244,13 @@ func (p *Preemptor) SnapshotPreemptionLimits(ctx context.Context) {
 // WithinPreemptionLimits reports whether the configurable preemptions in targets
 // fit within the remaining PreemptionLimits in the current snapshot.
 func (p *Preemptor) WithinPreemptionLimits(targets []*Target) bool {
-	var consumedLimits []policy.ConsumedLimits
+	preemptions := make([]policy.ConsumedLimits, 0, len(targets))
 	for _, target := range targets {
 		if data := target.ConfigurablePreemptionReasonData; data != nil {
-			consumedLimits = append(consumedLimits, data.ConsumedLimits)
+			preemptions = append(preemptions, data.ConsumedLimits)
 		}
 	}
-	return p.limitsSnapshot.WithinLimits(consumedLimits)
+	return p.limitsSnapshot.WithinLimits(preemptions)
 }
 
 // TakeRetryAt returns and clears the earliest retry timestamp from failed
