@@ -80,8 +80,8 @@ func (s *PreemptionLimitsSnapshot) allowance(limit policy.PreemptionLimitReferen
 // nextSlotTime returns when count more preemptions fit within limit for scopeValue,
 // or nil if waiting alone never makes room. count must exceed the current allowance.
 func (s *PreemptionLimitsSnapshot) nextSlotTime(limit policy.PreemptionLimitReference, scopeValue policy.PreemptionLimitScopeValue, count int32) *time.Time {
-	preemptionLimit := s.byName[limit]
-	if count > preemptionLimit.Spec.Limit {
+	preemptionLimit, found := s.byName[limit]
+	if !found || count > preemptionLimit.Spec.Limit {
 		return nil
 	}
 	events := s.events[limit][scopeValue]

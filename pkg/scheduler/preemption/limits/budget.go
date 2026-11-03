@@ -47,7 +47,7 @@ func (l *PreemptionLimiter) NewBudget() *PreemptionLimitBudget {
 // consumes, and returns those limits.
 //
 // If any limit has no budget left, it takes nothing and returns false along with
-// when target would fit, or nil if waiting alone never frees a slot.
+// when every limit has budget left again, or nil if waiting alone is not enough.
 func (b *PreemptionLimitBudget) TryConsume(
 	preemptor, target *workload.Info,
 	preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot,

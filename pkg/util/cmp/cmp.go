@@ -49,7 +49,7 @@ func LazyOr[T comparable](funcs ...func() T) T {
 	return zero
 }
 
-// EarliestTime returns the earlier of a and b, treating nil as never.
+// EarliestTime returns the earlier non-nil time of a and b, or nil if both are nil.
 func EarliestTime(a, b *time.Time) *time.Time {
 	switch {
 	case a == nil:

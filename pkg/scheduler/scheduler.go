@@ -301,7 +301,7 @@ func (e *entry) markAssumed() {
 }
 
 // recordAssignment stores a flavor assignment, its preemption targets, and
-// its retry timestamp. FlavorScanState aliases the stored assignment's
+// any retry timestamp. FlavorScanState aliases the stored assignment's
 // FlavorScanState so it tracks any later mutation.
 func (e *entry) recordAssignment(a flavorassigner.Assignment, targets []*preemption.Target, retryAt *time.Time) {
 	e.assignment = a

@@ -81,7 +81,7 @@ type Preemptor struct {
 	preemptionLimitTracker *limits.PreemptionLimitTracker
 	// limitsSnapshot holds the PreemptionLimits enforced in the current scheduling cycle.
 	limitsSnapshot *limits.PreemptionLimitsSnapshot
-	// retryAt is unsynchronized: scheduling is single-threaded.
+	// retryAt holds the earliest retry time from failed attempts until TakeRetryAt clears it.
 	retryAt *time.Time
 }
 
@@ -253,8 +253,8 @@ func (p *Preemptor) WithinPreemptionLimits(targets []*Target) bool {
 	return p.limitsSnapshot.WithinLimits(consumedLimits)
 }
 
-// TakeRetryAt returns and clears the earliest retry timestamp accumulated across
-// failed candidate searches.
+// TakeRetryAt returns and clears the earliest retry timestamp from failed
+// preemption attempts since the last call, or nil if none.
 func (p *Preemptor) TakeRetryAt() *time.Time {
 	retryAt := p.retryAt
 	p.retryAt = nil
@@ -441,6 +441,7 @@ type preemptionAttemptOpts struct {
 // Once the Workload fits, the heuristic tries to add Workloads back, in the
 // reverse order in which they were removed, while the incoming Workload still
 // fits.
+// If all strategies fail, it updates p.retryAt with their earliest retry timestamp.
 func (p *Preemptor) getTargets(ctx context.Context, strategies iter.Seq[PreemptionStrategy]) []*Target {
 	log := log.FromContext(ctx)
 	var retryAt *time.Time

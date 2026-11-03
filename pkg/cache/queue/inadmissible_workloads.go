@@ -183,9 +183,7 @@ func NotifyRetryInadmissible(m *Manager, cqNames sets.Set[kueue.ClusterQueueRefe
 	NotifyRetryInadmissibleAfter(m, cqNames, 0)
 }
 
-// NotifyRetryInadmissibleAfter schedules moving inadmissible workloads from the
-// given ClusterQueues, and their Cohort trees, back to the active heap after at
-// least delay (clamped to the requeuer's batch period).
+// NotifyRetryInadmissibleAfter is like NotifyRetryInadmissible, but waits at least delay.
 func NotifyRetryInadmissibleAfter(m *Manager, cqNames sets.Set[kueue.ClusterQueueReference], delay time.Duration) {
 	m.RLock()
 	defer m.RUnlock()

@@ -18,6 +18,7 @@ package queue
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -33,7 +34,7 @@ type testInadmissibleWorkloadRequeuer struct {
 	cqs     sets.Set[kueue.ClusterQueueReference]
 	cohorts sets.Set[kueue.CohortReference]
 	// cqDelays and cohortDelays hold the earliest positive delay requested since
-	// the last ProcessRequeues, matching workqueueRequeuer's earliest-wins behavior.
+	// the last ProcessRequeues.
 	cqDelays     map[kueue.ClusterQueueReference]time.Duration
 	cohortDelays map[kueue.CohortReference]time.Duration
 }
@@ -56,18 +57,20 @@ func (r *testInadmissibleWorkloadRequeuer) setManager(manager *Manager) {
 	r.manager = manager
 }
 
-// ClusterQueueDelays returns the earliest positive delay requested per ClusterQueue since the last ProcessRequeues.
+// ClusterQueueDelays returns the earliest positive delay requested per
+// ClusterQueue since the last ProcessRequeues.
 func (r *testInadmissibleWorkloadRequeuer) ClusterQueueDelays() map[kueue.ClusterQueueReference]time.Duration {
-	return r.cqDelays
+	return maps.Clone(r.cqDelays)
 }
 
-// CohortDelays returns the earliest positive delay requested per Cohort since the last ProcessRequeues.
+// CohortDelays returns the earliest positive delay requested per Cohort since
+// the last ProcessRequeues.
 func (r *testInadmissibleWorkloadRequeuer) CohortDelays() map[kueue.CohortReference]time.Duration {
-	return r.cohortDelays
+	return maps.Clone(r.cohortDelays)
 }
 
-// ProcessRequeues requeues all the inadmissible workloads
-// belonging to Cohorts/Queues which were notified, immediately regardless of any requested delay.
+// ProcessRequeues requeues all the inadmissible workloads belonging to
+// Cohorts/Queues which were notified, regardless of any requested delay.
 // Returns the total number of workloads moved.
 func (w *testInadmissibleWorkloadRequeuer) ProcessRequeues(ctx context.Context) int {
 	total := 0

@@ -49,9 +49,15 @@ func TestPreemptionLimitTrackerCounts(t *testing.T) {
 				"per-cq": {"cq-a": 2},
 			},
 		},
-		"event at the start of the window is counted": {
+		"event at the start of the window is not counted": {
 			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
 				"per-cq": {"cq-a": {cutoff}},
+			},
+			limits: []*kueuealpha.PreemptionLimit{perCQ},
+		},
+		"event at the end of the window is counted": {
+			events: map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events{
+				"per-cq": {"cq-a": {now}},
 			},
 			limits: []*kueuealpha.PreemptionLimit{perCQ},
 			want: preemptionCounts{

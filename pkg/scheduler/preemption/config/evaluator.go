@@ -166,9 +166,6 @@ func (p *PreemptionEvaluator) FindCandidates(
 	}
 
 	budget := p.preemptionLimiter.NewBudget()
-	defer func() {
-		p.retryAt = cmputil.EarliestTime(p.retryAt, budget.RetryAt())
-	}()
 	candidates, err := p.orderedCandidates(snapshot, frsNeedPreemption, kueuealpha.Always)
 	if err != nil {
 		return
@@ -218,8 +215,9 @@ func (p *PreemptionEvaluator) iterateOverCandidates(
 	preemptorCQ := snapshot.ClusterQueue(p.preemptor.ClusterQueue)
 	for _, candidate := range candidates {
 		targetCQ := snapshot.ClusterQueue(candidate.WlInfo.ClusterQueue)
-		consumedLimits, withinLimits := budget.TryConsume(p.preemptor, candidate.WlInfo, preemptorCQ, targetCQ)
+		consumedLimits, retryAt, withinLimits := budget.TryConsume(p.preemptor, candidate.WlInfo, preemptorCQ, targetCQ)
 		if !withinLimits {
+			p.retryAt = cmputil.EarliestTime(p.retryAt, retryAt)
 			continue
 		}
 		if !yield(&policy.Target{
