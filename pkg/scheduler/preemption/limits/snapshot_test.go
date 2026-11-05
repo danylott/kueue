@@ -265,6 +265,18 @@ func TestPreemptionLimitsSnapshotNextSlotTime(t *testing.T) {
 			limit:  "global",
 			count:  2,
 		},
+		"count which is allowed returns nil": {
+			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(2).Obj()},
+			events: events{now.Add(-20 * time.Second)},
+			limit:  "global",
+			count:  1,
+		},
+		"non-positive count returns nil": {
+			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
+			events: events{now.Add(-50 * time.Second), now.Add(-10 * time.Second)},
+			limit:  "global",
+			count:  0,
+		},
 		"unknown limit returns nil": {
 			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
 			limit:  "missing",

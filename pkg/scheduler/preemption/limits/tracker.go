@@ -55,8 +55,8 @@ func (e events) insert(ts time.Time) events {
 	return slices.Insert(e, i, ts)
 }
 
-// after returns the events strictly after cutoff. The result shares e's backing array.
-func (e events) after(cutoff time.Time) events {
+// eventsAfter returns the events strictly after cutoff. The result shares e's backing array.
+func (e events) eventsAfter(cutoff time.Time) events {
 	i := sort.Search(len(e), func(i int) bool { return e[i].After(cutoff) })
 	return e[i:]
 }
@@ -64,7 +64,7 @@ func (e events) after(cutoff time.Time) events {
 // pruneBefore reslices e to drop events before cutoff without copying. Dropped
 // elements stay in memory until a later insert reallocates the slice.
 func (e events) pruneBefore(cutoff time.Time) events {
-	i, _ := slices.BinarySearchFunc(e, cutoff, time.Time.Compare) // first event >= cutoff
+	i := sort.Search(len(e), func(i int) bool { return !e[i].Before(cutoff) })
 	return e[i:]
 }
 
@@ -120,7 +120,7 @@ func (t *PreemptionLimitTracker) Snapshot(now time.Time, preemptionLimits []kueu
 	for ref, limit := range limitByName {
 		cutoff := windowStart(now, limit)
 		for scopeValue, e := range t.events[ref] {
-			if inWindow := e.after(cutoff); len(inWindow) > 0 {
+			if inWindow := e.eventsAfter(cutoff); len(inWindow) > 0 {
 				if snapshotEvents[ref] == nil {
 					snapshotEvents[ref] = make(map[policy.PreemptionLimitScopeValue]events)
 				}
@@ -141,7 +141,7 @@ func (t *PreemptionLimitTracker) Counts(now time.Time, limits []*kueuealpha.Pree
 		ref := policy.PreemptionLimitReference(limit.Name)
 		cutoff := windowStart(now, limit)
 		for scopeValue, e := range t.events[ref] {
-			if count := len(e.after(cutoff)); count > 0 {
+			if count := len(e.eventsAfter(cutoff)); count > 0 {
 				counts.add(ref, scopeValue, int32(count))
 			}
 		}
