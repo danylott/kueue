@@ -66,7 +66,7 @@ func (e events) eventsAfter(cutoff time.Time) events {
 // pruneBefore reslices e to drop events before cutoff without copying. Dropped
 // elements stay in memory until a later insert reallocates the slice.
 func (e events) pruneBefore(cutoff time.Time) events {
-	i, _ := slices.BinarySearchFunc(e, cutoff, time.Time.Compare) // first event >= cutoff
+	i := sort.Search(len(e), func(i int) bool { return !e[i].Before(cutoff) })
 	return e[i:]
 }
 
