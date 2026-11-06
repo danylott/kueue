@@ -1202,10 +1202,6 @@ func TestNewEvaluatorForPreemptionConfigPreemptionLimits(t *testing.T) {
 }
 
 func TestPreemptionEvaluatorRetryAt(t *testing.T) {
-	if got := (*PreemptionEvaluator)(nil).RetryAt(); got != nil {
-		t.Errorf("(*PreemptionEvaluator)(nil).RetryAt() = %v, want nil", got)
-	}
-
 	const windowSeconds = 60
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	clusterQueues := []*kueue.ClusterQueue{
@@ -1220,6 +1216,7 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 	}
 	fr := resources.FlavorResource{Flavor: "default", Resource: corev1.ResourceCPU}
 	frMem := resources.FlavorResource{Flavor: "default", Resource: corev1.ResourceMemory}
+	emptyConfig := utiltestingalpha.MakePreemptionConfig("empty").Obj()
 	multiTriggerConfig := utiltestingalpha.MakePreemptionConfig("test").
 		Rule("low-tier-rule", kueuealpha.Always,
 			utiltestingalpha.MakeCandidateSelector(kueuealpha.AnyClusterQueue).
@@ -1238,16 +1235,29 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 	}
 
 	cases := map[string]struct {
+		config           *kueuealpha.PreemptionConfig // Nil leaves the evaluator nil.
 		preemptionLimits []kueuealpha.PreemptionLimit
 		recordedEvents   []recordedEvent
 		admitted         []kueue.Workload
-		interruptOnYield bool
+		maxYields        int
 		// frsPerCall, when set, runs FindCandidates once per FlavorResource instead of once for fr.
 		frsPerCall  []resources.FlavorResource
 		wantYielded []string
 		wantRetryAt *time.Time
 	}{
+		"nil evaluator returns nil": {},
+		"evaluator without rules returns nil": {
+			config:           emptyConfig,
+			preemptionLimits: []kueuealpha.PreemptionLimit{perPreemptedCQLimit},
+			recordedEvents: []recordedEvent{
+				{ts: now.Add(-20 * time.Second), consumed: policy.ConsumedLimits{"per-preempted-cq": "a"}},
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("a1").SimpleReserveQuota("a", "default", now).Obj(),
+			},
+		},
 		"skipped candidate updates RetryAt while later allowed candidate is still yielded": {
+			config:           multiTriggerConfig,
 			preemptionLimits: []kueuealpha.PreemptionLimit{perPreemptedCQLimit},
 			recordedEvents: []recordedEvent{
 				{ts: now.Add(-20 * time.Second), consumed: policy.ConsumedLimits{"per-preempted-cq": "a"}},
@@ -1260,6 +1270,7 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 			wantRetryAt: new(now.Add(40 * time.Second)),
 		},
 		"earlier RetryAt from Always trigger is preserved when InsufficientQuota expires later": {
+			config:           multiTriggerConfig,
 			preemptionLimits: []kueuealpha.PreemptionLimit{perPreemptedCQLimit},
 			recordedEvents: []recordedEvent{
 				{ts: now.Add(-45 * time.Second), consumed: policy.ConsumedLimits{"per-preempted-cq": "a"}},
@@ -1272,6 +1283,7 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 			wantRetryAt: new(now.Add(15 * time.Second)),
 		},
 		"later RetryAt from Always trigger is lowered when InsufficientQuota expires earlier": {
+			config:           multiTriggerConfig,
 			preemptionLimits: []kueuealpha.PreemptionLimit{perPreemptedCQLimit},
 			recordedEvents: []recordedEvent{
 				{ts: now.Add(-20 * time.Second), consumed: policy.ConsumedLimits{"per-preempted-cq": "a"}},
@@ -1284,6 +1296,7 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 			wantRetryAt: new(now.Add(15 * time.Second)),
 		},
 		"interrupted yield preserves RetryAt from candidates evaluated before halting": {
+			config:           multiTriggerConfig,
 			preemptionLimits: []kueuealpha.PreemptionLimit{perPreemptedCQLimit},
 			recordedEvents: []recordedEvent{
 				{ts: now.Add(-20 * time.Second), consumed: policy.ConsumedLimits{"per-preempted-cq": "a"}},
@@ -1294,11 +1307,12 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 				*unitWl.Clone().Name("b1").SimpleReserveQuota("b", "default", now).Obj(),
 				*unitWl.Clone().Name("c1").SimpleReserveQuota("c", "default", now).Obj(),
 			},
-			interruptOnYield: true,
-			wantYielded:      []string{"/b1"},
-			wantRetryAt:      new(now.Add(40 * time.Second)),
+			maxYields:   1,
+			wantYielded: []string{"/b1"},
+			wantRetryAt: new(now.Add(40 * time.Second)),
 		},
 		"limit of 0 on one candidate does not mask expiring limit on another candidate": {
+			config: multiTriggerConfig,
 			preemptionLimits: []kueuealpha.PreemptionLimit{
 				*utiltestingalpha.MakePreemptionLimit("zero-a", kueuealpha.PreemptedCQLimitScope).
 					Limit(0).LimitWindowSeconds(windowSeconds).
@@ -1315,6 +1329,7 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 			wantRetryAt: new(now.Add(15 * time.Second)),
 		},
 		"RetryAt from earlier FindCandidates call is preserved when subsequent call hits no limits": {
+			config:           multiTriggerConfig,
 			preemptionLimits: []kueuealpha.PreemptionLimit{perPreemptedCQLimit},
 			recordedEvents: []recordedEvent{
 				{ts: now.Add(-45 * time.Second), consumed: policy.ConsumedLimits{"per-preempted-cq": "b"}},
@@ -1339,10 +1354,11 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 			for i := range tc.admitted {
 				tc.admitted[i].UID = types.UID(tc.admitted[i].Name)
 			}
-			cl := utiltesting.NewClientBuilder().
-				WithObjects(multiTriggerConfig).
-				WithLists(&kueue.WorkloadList{Items: tc.admitted}).
-				Build()
+			builder := utiltesting.NewClientBuilder().WithLists(&kueue.WorkloadList{Items: tc.admitted})
+			if tc.config != nil {
+				builder = builder.WithObjects(tc.config)
+			}
+			cl := builder.Build()
 			cqCache := schdcache.New(cl)
 			cqCache.AddOrUpdateResourceFlavor(log, utiltestingapi.MakeResourceFlavor("default").Obj())
 			for _, cq := range clusterQueues {
@@ -1357,9 +1373,12 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 			}
 			limitsSnapshot := tracker.Snapshot(now, tc.preemptionLimits)
 
-			preemptor := workload.NewInfo(log, unitWl.Clone().Name("a_incoming").Obj())
-			preemptor.ClusterQueue = "a"
-			evaluator := NewEvaluatorForPreemptionConfig(ctx, log, cl, limitsSnapshot, preemptexpectations.New(), multiTriggerConfig.Name, preemptor, candidatesByName)
+			var evaluator *PreemptionEvaluator
+			if tc.config != nil {
+				preemptor := workload.NewInfo(log, unitWl.Clone().Name("a_incoming").Obj())
+				preemptor.ClusterQueue = "a"
+				evaluator = NewEvaluatorForPreemptionConfig(ctx, log, cl, limitsSnapshot, preemptexpectations.New(), tc.config.Name, preemptor, candidatesByName)
+			}
 
 			frsPerCall := tc.frsPerCall
 			if len(frsPerCall) == 0 {
@@ -1373,7 +1392,7 @@ func TestPreemptionEvaluatorRetryAt(t *testing.T) {
 				}
 				evaluator.FindCandidates(snapshot, sets.New(callFR), func() bool { return false }, func(target *policy.Target) bool {
 					gotYielded = append(gotYielded, string(workload.Key(target.WorkloadInfo.Obj)))
-					return !tc.interruptOnYield
+					return tc.maxYields == 0 || len(gotYielded) < tc.maxYields
 				})
 			}
 

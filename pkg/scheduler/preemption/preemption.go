@@ -183,10 +183,20 @@ func (p *Preemptor) GetPreemptionStrategyIterator(
 }
 
 func (p *Preemptor) getPreemptionStrategyIterator(ctx context.Context, preemptionCtx *preemptionCtx) iter.Seq[PreemptionStrategy] {
+	var strategies iter.Seq[PreemptionStrategy]
 	if p.enableFairSharing {
-		return fairPreemptionStrategy(ctx, p, preemptionCtx, p.fsStrategies)
+		strategies = fairPreemptionStrategy(ctx, p, preemptionCtx, p.fsStrategies)
+	} else {
+		strategies = classicalPreemptionStrategy(ctx, p, preemptionCtx)
 	}
-	return classicalPreemptionStrategy(ctx, p, preemptionCtx)
+	return func(yield func(PreemptionStrategy) bool) {
+		for strategy := range strategies {
+			if !yield(strategy) {
+				return
+			}
+		}
+		p.retryAt = cmputil.EarliestTime(p.retryAt, preemptionCtx.configurableEvaluator.RetryAt())
+	}
 }
 
 // GetTargetsWithStrategy returns the workloads to evict using the provided preemption strategies.
@@ -441,10 +451,8 @@ type preemptionAttemptOpts struct {
 // Once the Workload fits, the heuristic tries to add Workloads back, in the
 // reverse order in which they were removed, while the incoming Workload still
 // fits.
-// If all strategies fail, it updates p.retryAt with their earliest retry timestamp.
 func (p *Preemptor) getTargets(ctx context.Context, strategies iter.Seq[PreemptionStrategy]) []*Target {
 	log := log.FromContext(ctx)
-	var retryAt *time.Time
 	for strategy := range strategies {
 		var targets []*Target
 		for candidate := range strategy.candidates {
@@ -472,9 +480,7 @@ func (p *Preemptor) getTargets(ctx context.Context, strategies iter.Seq[Preempti
 			}
 		}
 		restoreSnapshot(strategy.pCtx.snapshot, targets)
-		retryAt = cmputil.EarliestTime(retryAt, strategy.pCtx.configurableEvaluator.RetryAt())
 	}
-	p.retryAt = cmputil.EarliestTime(p.retryAt, retryAt)
 	if logV := log.V(6); logV.Enabled() {
 		logV.Info("All preemption strategies failed")
 	}

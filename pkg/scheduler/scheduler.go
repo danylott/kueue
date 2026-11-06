@@ -1296,7 +1296,7 @@ func (s *Scheduler) requeueAndUpdate(ctx context.Context, e entry) {
 	// RequeueWorkload resets e.ClusterQueue for non-admitted workloads.
 	cqName := e.ClusterQueue
 	added := s.queues.RequeueWorkload(ctx, &e.Info, e.requeueReason, qcache.QuotaReservedReason(e.quotaReservedReason))
-	if e.requeueReason == qcache.RequeueReasonPreemptionNoCandidates && e.retryAt != nil {
+	if (e.requeueReason == qcache.RequeueReasonPreemptionNoCandidates || e.requeueReason == qcache.RequeueReasonNoFit) && e.retryAt != nil {
 		qcache.NotifyRetryInadmissibleAfter(s.queues, sets.New(cqName), e.retryAt.Sub(s.clock.Now()))
 	}
 	log.V(2).
@@ -1631,7 +1631,7 @@ func (s *Scheduler) getAssignments(ctx context.Context, wl *workload.Info, snap 
 		}
 	}
 
-	// Always drain so a skipped flavor's retry timestamp doesn't leak to the next workload.
+	// Always drain so a skipped flavor's retry timestamp doesn't leak across calls.
 	retryAt = s.preemptor.TakeRetryAt()
 	fullAssignment, targets = *assignmentPlan.Assignment, assignmentPlan.PreemptionTargets
 	if assignmentPlan.CanFit() {
