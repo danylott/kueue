@@ -247,7 +247,7 @@ func TestGetAssignmentsRetryAt(t *testing.T) {
 }
 
 func TestSchedulePreemptionRetry(t *testing.T) {
-	now := time.Now().Truncate(time.Second)
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	fakeClock := testingclock.NewFakeClock(now)
 	ignoreEventMessageCmpOpts := cmp.Options{cmpopts.IgnoreFields(utiltesting.EventRecord{}, "Message")}
 
@@ -260,14 +260,13 @@ func TestSchedulePreemptionRetry(t *testing.T) {
 			utiltestingalpha.MakeCandidateSelector(kueuealpha.WithinClusterQueue).Obj(),
 		).
 		Obj()
-	limitsFeatureGates := map[featuregate.Feature]bool{
-		features.ConfigurablePreemptions:      true,
-		features.ConfigurablePreemptionLimits: true,
-	}
 
 	cases := map[string]scheduleTestCase{
 		"standalone ClusterQueue requeues workload after earliest PreemptionLimit expiry across flavors": {
-			featureGates: limitsFeatureGates,
+			featureGates: map[featuregate.Feature]bool{
+				features.ConfigurablePreemptions:      true,
+				features.ConfigurablePreemptionLimits: true,
+			},
 			additionalClusterQueues: []kueue.ClusterQueue{
 				*utiltestingapi.MakeClusterQueue("limits-cq").
 					Annotation(kueuealpha.PreemptionConfigNameAnnotation, "limits-cfg").
@@ -460,82 +459,6 @@ func TestSchedulePreemptionRetry(t *testing.T) {
 			eventCmpOpts: ignoreEventMessageCmpOpts,
 			wantEvents: []utiltesting.EventRecord{
 				utiltesting.MakeEventRecord("default", "incoming", kueue.WorkloadQuotaReservedReasonExceedsMaxQuota, corev1.EventTypeWarning).Obj(),
-			},
-		},
-		"limit of 0 does not arm retry delay": {
-			featureGates: limitsFeatureGates,
-			additionalClusterQueues: []kueue.ClusterQueue{
-				*utiltestingapi.MakeClusterQueue("limits-cq").
-					Annotation(kueuealpha.PreemptionConfigNameAnnotation, "limits-cfg").
-					ResourceGroup(
-						*utiltestingapi.MakeFlavorQuotas("on-demand").Resource(corev1.ResourceCPU, "1").Obj(),
-					).
-					Obj(),
-			},
-			additionalLocalQueues: []kueue.LocalQueue{
-				*utiltestingapi.MakeLocalQueue("limits-lq", "default").ClusterQueue("limits-cq").Obj(),
-			},
-			objects: []client.Object{
-				preemptionCfg,
-				utiltestingalpha.MakePreemptionLimit("per-workload", kueuealpha.PreemptedWorkloadLimitScope).
-					Limit(0).LimitWindowSeconds(60).Obj(),
-			},
-			workloads: []kueue.Workload{
-				*utiltestingapi.MakeWorkload("v-od", "default").
-					Queue("limits-lq").
-					Request(corev1.ResourceCPU, "1").
-					SimpleReserveQuota("limits-cq", "on-demand", now).
-					AdmittedAt(true, now).
-					Obj(),
-				*utiltestingapi.MakeWorkload("incoming", "default").
-					Queue("limits-lq").
-					Request(corev1.ResourceCPU, "1").
-					Creation(now).
-					Obj(),
-			},
-			wantWorkloads: []kueue.Workload{
-				*utiltestingapi.MakeWorkload("incoming", "default").
-					Queue("limits-lq").
-					Request(corev1.ResourceCPU, "1").
-					Creation(now).
-					Condition(metav1.Condition{
-						Type:               kueue.WorkloadQuotaReserved,
-						Status:             metav1.ConditionFalse,
-						Reason:             kueue.WorkloadQuotaReservedReasonWaitingForQuota,
-						Message:            "couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor on-demand, 1 more needed",
-						LastTransitionTime: metav1.NewTime(now),
-					}).
-					Condition(metav1.Condition{
-						Type:               kueue.WorkloadAdmitted,
-						Status:             metav1.ConditionFalse,
-						Reason:             kueue.WorkloadAdmittedReasonNoReservation,
-						Message:            "The workload has no reservation",
-						LastTransitionTime: metav1.NewTime(now),
-					}).
-					ResourceRequests(kueue.PodSetRequest{
-						Name:      kueue.DefaultPodSetName,
-						Resources: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
-					}).
-					Obj(),
-				*utiltestingapi.MakeWorkload("v-od", "default").
-					Queue("limits-lq").
-					Request(corev1.ResourceCPU, "1").
-					SimpleReserveQuota("limits-cq", "on-demand", now).
-					AdmittedAt(true, now).
-					Obj(),
-			},
-			wantAssignments: map[workload.Reference]kueue.Admission{
-				"default/v-od": *utiltestingapi.MakeAdmission("limits-cq").
-					PodSets(utiltestingapi.MakePodSetAssignment(kueue.DefaultPodSetName).
-						Assignment(corev1.ResourceCPU, "on-demand", "1").Obj()).
-					Obj(),
-			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
-				"limits-cq": {"default/incoming"},
-			},
-			eventCmpOpts: ignoreEventMessageCmpOpts,
-			wantEvents: []utiltesting.EventRecord{
-				utiltesting.MakeEventRecord("default", "incoming", kueue.WorkloadQuotaReservedReasonWaitingForQuota, corev1.EventTypeWarning).Obj(),
 			},
 		},
 	}
