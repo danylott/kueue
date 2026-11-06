@@ -53,7 +53,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption"
 	preemptexpectations "sigs.k8s.io/kueue/pkg/scheduler/preemption/expectations"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/limits"
-	preemptionpolicy "sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
+	"sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
 	"sigs.k8s.io/kueue/pkg/util/limitrange"
 	"sigs.k8s.io/kueue/pkg/util/roletracker"
 	"sigs.k8s.io/kueue/pkg/util/routine"
@@ -122,14 +122,15 @@ type scheduleTestCase struct {
 	// for the preemption_target_recomputations_total metric.
 	wantPreemptionTargetRecomputations map[string]map[string]int
 
-	preemptionLimitRecords        []recordedPreemptionLimit
+	// recordedPreemptions are recorded in the PreemptionLimitTracker before the cycle.
+	recordedPreemptions           []recordedPreemption
 	wantClusterQueueRequeueDelays map[kueue.ClusterQueueReference]time.Duration
 	wantCohortRequeueDelays       map[kueue.CohortReference]time.Duration
 }
 
-type recordedPreemptionLimit struct {
+type recordedPreemption struct {
 	at       time.Time
-	consumed preemptionpolicy.ConsumedLimits
+	consumed policy.ConsumedLimits
 }
 
 // scheduleTestConfig carries the per-suite fixtures and knobs shared by the core
@@ -289,8 +290,15 @@ func runScheduleTestCases(t *testing.T, cfg scheduleTestConfig, cases map[string
 						schedulerOpts = append(schedulerOpts, WithRefillBudget(*tc.refillBudget))
 					}
 					if fg[features.ConfigurablePreemptionLimits] {
+						// The scheduler only enforces the PreemptionLimits synced by the
+						// PreemptionLimitReconciler.
 						tracker := limits.NewPreemptionLimitTracker()
-						for _, rec := range tc.preemptionLimitRecords {
+						for _, obj := range tc.objects {
+							if limit, ok := obj.(*kueuealpha.PreemptionLimit); ok {
+								tracker.Sync(limit)
+							}
+						}
+						for _, rec := range tc.recordedPreemptions {
 							tracker.Record(rec.at, rec.consumed)
 						}
 						schedulerOpts = append(schedulerOpts, WithPreemptionLimitTracker(tracker))

@@ -37,7 +37,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/scheduler/flavorassigner"
 	preemptexpectations "sigs.k8s.io/kueue/pkg/scheduler/preemption/expectations"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/limits"
-	preemptionpolicy "sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
+	"sigs.k8s.io/kueue/pkg/scheduler/preemption/policy"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	utiltestingalpha "sigs.k8s.io/kueue/pkg/util/testing/v1alpha1"
 	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
@@ -184,7 +184,7 @@ func TestGetAssignmentsRetryAt(t *testing.T) {
 			spotQuota:   "0",
 			wantRetryAt: new(now.Add(10 * time.Second)),
 		},
-		"clears and drains retryAt when fallback flavor fits": {
+		"returns nil retryAt and leaves preemptor drained when fallback flavor fits": {
 			spotQuota:   "1",
 			wantRetryAt: nil,
 		},
@@ -218,7 +218,10 @@ func TestGetAssignmentsRetryAt(t *testing.T) {
 			}
 
 			limitTracker := limits.NewPreemptionLimitTracker()
-			limitTracker.Record(now.Add(-50*time.Second), preemptionpolicy.ConsumedLimits{"per-workload": "default/v-od"})
+			limitTracker.Sync(preemptionLimit)
+			limitTracker.Record(now.Add(-50*time.Second), policy.ConsumedLimits{
+				"per-workload": policy.NewConsumedLimit(preemptionLimit, "default/v-od"),
+			})
 
 			qManager := qcache.NewManagerForUnitTests(cl, cqCache)
 			sched := New(
@@ -227,7 +230,7 @@ func TestGetAssignmentsRetryAt(t *testing.T) {
 				WithPreemptionExpectations(preemptexpectations.New()),
 				WithPreemptionLimitTracker(limitTracker),
 			)
-			sched.preemptor.SnapshotPreemptionLimits(ctx)
+			sched.preemptor.SnapshotPreemptionLimits()
 			snap, err := cqCache.Snapshot(ctx)
 			if err != nil {
 				t.Fatalf("Snapshot: %v", err)
@@ -260,6 +263,13 @@ func TestSchedulePreemptionRetry(t *testing.T) {
 			utiltestingalpha.MakeCandidateSelector(kueuealpha.WithinClusterQueue).Obj(),
 		).
 		Obj()
+	perWorkloadLimit := utiltestingalpha.MakePreemptionLimit("per-workload", kueuealpha.PreemptedWorkloadLimitScope).
+		Limit(1).LimitWindowSeconds(60).Obj()
+	perWorkloadConsumed := func(wl policy.PreemptionLimitScopeValue) policy.ConsumedLimits {
+		return policy.ConsumedLimits{
+			"per-workload": policy.NewConsumedLimit(perWorkloadLimit, wl),
+		}
+	}
 
 	cases := map[string]scheduleTestCase{
 		"standalone ClusterQueue requeues workload after earliest PreemptionLimit expiry across flavors": {
@@ -281,12 +291,11 @@ func TestSchedulePreemptionRetry(t *testing.T) {
 			},
 			objects: []client.Object{
 				preemptionCfg,
-				utiltestingalpha.MakePreemptionLimit("per-workload", kueuealpha.PreemptedWorkloadLimitScope).
-					Limit(1).LimitWindowSeconds(60).Obj(),
+				perWorkloadLimit.DeepCopy(),
 			},
-			preemptionLimitRecords: []recordedPreemptionLimit{
-				{at: now.Add(-35 * time.Second), consumed: preemptionpolicy.ConsumedLimits{"per-workload": "default/v-od"}},
-				{at: now.Add(-50 * time.Second), consumed: preemptionpolicy.ConsumedLimits{"per-workload": "default/v-spot"}},
+			recordedPreemptions: []recordedPreemption{
+				{at: now.Add(-35 * time.Second), consumed: perWorkloadConsumed("default/v-od")},
+				{at: now.Add(-50 * time.Second), consumed: perWorkloadConsumed("default/v-spot")},
 			},
 			workloads: []kueue.Workload{
 				*utiltestingapi.MakeWorkload("v-od", "default").
@@ -365,7 +374,7 @@ func TestSchedulePreemptionRetry(t *testing.T) {
 				utiltesting.MakeEventRecord("default", "incoming", kueue.WorkloadQuotaReservedReasonWaitingForQuota, corev1.EventTypeWarning).Obj(),
 			},
 		},
-		"partially admissible workload exceeding max capacity at full count arms PreemptionLimit retry delay when reduced count hits expiring PreemptionLimit": {
+		"reduced count of partially admissible workload arms PreemptionLimit retry delay": {
 			featureGates: map[featuregate.Feature]bool{
 				features.PartialAdmission:             true,
 				features.ConfigurablePreemptions:      true,
@@ -384,11 +393,10 @@ func TestSchedulePreemptionRetry(t *testing.T) {
 			},
 			objects: []client.Object{
 				preemptionCfg,
-				utiltestingalpha.MakePreemptionLimit("per-workload", kueuealpha.PreemptedWorkloadLimitScope).
-					Limit(1).LimitWindowSeconds(60).Obj(),
+				perWorkloadLimit.DeepCopy(),
 			},
-			preemptionLimitRecords: []recordedPreemptionLimit{
-				{at: now.Add(-50 * time.Second), consumed: preemptionpolicy.ConsumedLimits{"per-workload": "default/v-od"}},
+			recordedPreemptions: []recordedPreemption{
+				{at: now.Add(-50 * time.Second), consumed: perWorkloadConsumed("default/v-od")},
 			},
 			workloads: []kueue.Workload{
 				*utiltestingapi.MakeWorkload("v-od", "default").

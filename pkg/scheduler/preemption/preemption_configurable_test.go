@@ -1199,8 +1199,8 @@ func TestGetTargetsWithStrategyRetryAt(t *testing.T) {
 		wantTargets []string
 		wantRetryAt *time.Time
 	}{
-		"unset retryAt returns nil when no strategies run": {},
-		"failed candidate search records earliest retryAt and TakeRetryAt clears it": {
+		"TakeRetryAt returns nil when no strategies run": {},
+		"failed candidate search records earliest retry time and TakeRetryAt clears it": {
 			recordedAt: map[policy.PreemptionLimitScopeValue]time.Time{
 				"cq-a": now.Add(-45 * time.Second),
 				"cq-b": now.Add(-20 * time.Second),
@@ -1210,7 +1210,7 @@ func TestGetTargetsWithStrategyRetryAt(t *testing.T) {
 			},
 			wantRetryAt: new(now.Add(15 * time.Second)),
 		},
-		"earlier retryAt is preserved across multiple failed searches": {
+		"TakeRetryAt returns earliest retry time across multiple failed searches": {
 			recordedAt: map[policy.PreemptionLimitScopeValue]time.Time{
 				"cq-a": now.Add(-45 * time.Second),
 				"cq-b": now.Add(-20 * time.Second),
@@ -1221,7 +1221,7 @@ func TestGetTargetsWithStrategyRetryAt(t *testing.T) {
 			},
 			wantRetryAt: new(now.Add(15 * time.Second)),
 		},
-		"rejected strategy verification preserves retryAt from skipped candidates": {
+		"rejected strategy verification preserves retry time from skipped candidates": {
 			recordedAt: map[policy.PreemptionLimitScopeValue]time.Time{
 				"cq-a": now.Add(-45 * time.Second),
 			},
@@ -1230,7 +1230,7 @@ func TestGetTargetsWithStrategyRetryAt(t *testing.T) {
 			},
 			wantRetryAt: new(now.Add(15 * time.Second)),
 		},
-		"failed earlier strategy does not leak retryAt when subsequent strategy succeeds": {
+		"failed earlier strategy does not set retry time when subsequent strategy succeeds": {
 			recordedAt: map[policy.PreemptionLimitScopeValue]time.Time{
 				"cq-a": now.Add(-45 * time.Second),
 			},
@@ -1268,12 +1268,13 @@ func TestGetTargetsWithStrategyRetryAt(t *testing.T) {
 			}
 
 			tracker := limits.NewPreemptionLimitTracker()
+			tracker.Sync(perCQLimit)
 			for cqName, ts := range tc.recordedAt {
-				tracker.Record(ts, policy.ConsumedLimits{"per-cq": cqName})
+				tracker.Record(ts, policy.ConsumedLimits{"per-cq": policy.NewConsumedLimit(perCQLimit, cqName)})
 			}
 
 			preemptor := New(cl, workload.Ordering{}, &utiltesting.EventRecorder{}, nil, false, clocktesting.NewFakeClock(now), nil, preemptexpectations.New(), nil, tracker)
-			preemptor.SnapshotPreemptionLimits(ctx)
+			preemptor.SnapshotPreemptionLimits()
 
 			incoming := workload.NewInfo(log, utiltestingapi.MakeWorkload("incoming", "default").UID("incoming").
 				Request(corev1.ResourceCPU, "1").Obj())

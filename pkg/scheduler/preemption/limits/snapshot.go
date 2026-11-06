@@ -43,7 +43,14 @@ type PreemptionLimitsSnapshot struct {
 // Record records a preemption at ts in the snapshot for every PreemptionLimit
 // and scope value in consumedLimits.
 func (s *PreemptionLimitsSnapshot) Record(ts time.Time, consumedLimits policy.ConsumedLimits) {
-	recordEvents(s.events, ts, consumedLimits)
+	for limit, consumed := range consumedLimits {
+		scopes, found := s.events[limit]
+		if !found {
+			scopes = make(map[policy.PreemptionLimitScopeValue]events)
+			s.events[limit] = scopes
+		}
+		scopes[consumed.ScopeValue] = scopes[consumed.ScopeValue].insert(ts)
+	}
 }
 
 // WithinLimits reports whether preemptions fit together within the remaining
@@ -54,9 +61,9 @@ func (s *PreemptionLimitsSnapshot) WithinLimits(preemptions []policy.ConsumedLim
 	}
 	taken := preemptionCounts{}
 	for _, consumedLimits := range preemptions {
-		for limit, scopeValue := range consumedLimits {
-			taken.add(limit, scopeValue, 1)
-			if taken[limit][scopeValue] > s.allowance(limit, scopeValue) {
+		for limit, consumed := range consumedLimits {
+			taken.add(limit, consumed.ScopeValue, 1)
+			if taken[limit][consumed.ScopeValue] > s.allowance(limit, consumed.ScopeValue) {
 				return false
 			}
 		}
@@ -84,10 +91,10 @@ func (s *PreemptionLimitsSnapshot) nextSlotTime(limit policy.PreemptionLimitRefe
 	if !found || count <= 0 || count > preemptionLimit.Spec.Limit {
 		return nil
 	}
-	events := s.events[limit][scopeValue]
-	index := len(events) + int(count-preemptionLimit.Spec.Limit) - 1
+	recorded := s.events[limit][scopeValue]
+	index := len(recorded) + int(count-preemptionLimit.Spec.Limit) - 1
 	if index < 0 {
 		return nil
 	}
-	return new(events[index].Add(time.Duration(preemptionLimit.Spec.LimitWindowSeconds) * time.Second))
+	return new(recorded[index].Add(time.Duration(preemptionLimit.Spec.LimitWindowSeconds) * time.Second))
 }
