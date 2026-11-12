@@ -161,7 +161,7 @@ func windowStart(now time.Time, limit *kueuealpha.PreemptionLimit) time.Time {
 }
 
 // Snapshot returns a point-in-time snapshot of the tracked PreemptionLimits
-// and their preemption events within each limit's window (windowStart, now].
+// and their preemptions within each limit's window (windowStart, now].
 //
 // Because both the PreemptionLimit specs and their recorded events are read
 // together from the tracker, a spec change only takes effect in snapshots once
@@ -170,20 +170,16 @@ func (t *PreemptionLimitTracker) Snapshot(now time.Time) *PreemptionLimitsSnapsh
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	snapshot := &PreemptionLimitsSnapshot{
-		limitByName: make(map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit, len(t.limits)),
-		events:      make(map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]events, len(t.limits)),
+		limitByName:   make(map[policy.PreemptionLimitReference]*kueuealpha.PreemptionLimit, len(t.limits)),
+		recorded:      make(preemptionCounts, len(t.limits)),
+		earliestEvent: make(map[policy.PreemptionLimitReference]map[policy.PreemptionLimitScopeValue]time.Time, len(t.limits)),
 	}
 	for ref, ls := range t.limits {
 		snapshot.limitByName[ref] = ls.limit
 		cutoff := windowStart(now, ls.limit)
 		for scopeValue, e := range ls.eventsByScopeValue {
 			if inWindow := e.eventsAfter(cutoff); len(inWindow) > 0 {
-				scopes, found := snapshot.events[ref]
-				if !found {
-					scopes = make(map[policy.PreemptionLimitScopeValue]events)
-					snapshot.events[ref] = scopes
-				}
-				scopes[scopeValue] = slices.Clone(inWindow)
+				snapshot.record(ref, scopeValue, int32(len(inWindow)), inWindow[0])
 			}
 		}
 	}

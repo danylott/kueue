@@ -158,121 +158,59 @@ func TestPreemptionLimitsSnapshotRecord(t *testing.T) {
 	}
 }
 
-func TestPreemptionLimitsSnapshotRecordEvents(t *testing.T) {
-	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	globalLimit := utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).
-		Limit(5).LimitWindowSeconds(60).Obj()
-	globalConsumed := policy.NewConsumedLimit(globalLimit, policy.GlobalScopeValue)
-
-	cases := map[string]struct {
-		seeded events
-		ts     time.Time
-		want   events
-	}{
-		"later event is appended": {
-			seeded: events{now.Add(-20 * time.Second), now},
-			ts:     now.Add(5 * time.Second),
-			want:   events{now.Add(-20 * time.Second), now, now.Add(5 * time.Second)},
-		},
-		"earlier event is inserted in order": {
-			seeded: events{now.Add(-20 * time.Second), now},
-			ts:     now.Add(-10 * time.Second),
-			want:   events{now.Add(-20 * time.Second), now.Add(-10 * time.Second), now},
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			// Spare capacity ensures an uncloned slice would overwrite tracker's backing array.
-			seeded := make(events, len(tc.seeded), len(tc.seeded)+2)
-			copy(seeded, tc.seeded)
-			tracker := NewTrackerForTest([]kueuealpha.PreemptionLimit{*globalLimit}, EventsByLimit{
-				"global": {policy.GlobalScopeValue: seeded},
-			})
-
-			snapshot := tracker.Snapshot(now)
-			snapshot.Record(tc.ts, policy.ConsumedLimits{"global": globalConsumed})
-
-			wantSnapshot := EventsByLimit{
-				"global": {policy.GlobalScopeValue: tc.want},
-			}
-			if diff := gocmp.Diff(wantSnapshot, snapshot.events); diff != "" {
-				t.Errorf("Unexpected snapshot events (-want,+got):\n%s", diff)
-			}
-			wantTracker := ScopeEvents{policy.GlobalScopeValue: tc.seeded}
-			if diff := gocmp.Diff(wantTracker, tracker.limits["global"].eventsByScopeValue); diff != "" {
-				t.Errorf("Unexpected tracker events after snapshot.Record (-want,+got):\n%s", diff)
-			}
-		})
-	}
-}
-
 func TestPreemptionLimitsSnapshotNextSlotTime(t *testing.T) {
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	global := utiltestingalpha.MakePreemptionLimit("global", kueuealpha.GlobalPreemptionLimitScope).
 		LimitWindowSeconds(60)
+	globalOne := global.Clone().Limit(1).Obj()
+	globalConsumed := policy.ConsumedLimits{"global": policy.NewConsumedLimit(globalOne, policy.GlobalScopeValue)}
 
 	cases := map[string]struct {
-		limits []kueuealpha.PreemptionLimit
-		events events
-		limit  policy.PreemptionLimitReference
-		count  int32
-		want   *time.Time
+		limits   []kueuealpha.PreemptionLimit
+		events   events
+		recorded []time.Time
+		limit    policy.PreemptionLimitReference
+		want     *time.Time
 	}{
-		"single active event expires after window": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
-			events: events{now.Add(-20 * time.Second)},
-			limit:  "global",
-			count:  1,
-			want:   new(now.Add(40 * time.Second)),
-		},
-		"multiple needed slots wait for enough events to expire": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(2).Obj()},
+		"earliest active event expires after window": {
+			limits: []kueuealpha.PreemptionLimit{*globalOne},
 			events: events{now.Add(-40 * time.Second), now.Add(-10 * time.Second)},
 			limit:  "global",
-			count:  2,
-			want:   new(now.Add(50 * time.Second)),
+			want:   new(now.Add(20 * time.Second)),
 		},
-		"limit lowered below recorded events waits until excess events expire": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
-			events: events{now.Add(-50 * time.Second), now.Add(-30 * time.Second), now.Add(-10 * time.Second)},
-			limit:  "global",
-			count:  1,
-			want:   new(now.Add(50 * time.Second)),
+		"later event recorded in snapshot keeps earlier slot time": {
+			limits:   []kueuealpha.PreemptionLimit{*globalOne},
+			events:   events{now.Add(-20 * time.Second)},
+			recorded: []time.Time{now.Add(5 * time.Second)},
+			limit:    "global",
+			want:     new(now.Add(40 * time.Second)),
 		},
-		"event after snapshot time is counted in slot time": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
-			events: events{now.Add(5 * time.Second)},
+		"earlier event recorded in snapshot lowers slot time": {
+			limits:   []kueuealpha.PreemptionLimit{*globalOne},
+			events:   events{now.Add(-10 * time.Second)},
+			recorded: []time.Time{now.Add(-25 * time.Second)},
+			limit:    "global",
+			want:     new(now.Add(35 * time.Second)),
+		},
+		"event recorded in empty snapshot sets slot time": {
+			limits:   []kueuealpha.PreemptionLimit{*globalOne},
+			recorded: []time.Time{now.Add(5 * time.Second)},
+			limit:    "global",
+			want:     new(now.Add(65 * time.Second)),
+		},
+		"no recorded events returns nil": {
+			limits: []kueuealpha.PreemptionLimit{*globalOne},
 			limit:  "global",
-			count:  1,
-			want:   new(now.Add(65 * time.Second)),
 		},
 		"limit of 0 never frees a slot": {
 			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(0).Obj()},
-			limit:  "global",
-			count:  1,
-		},
-		"count exceeding limit never frees a slot": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
 			events: events{now.Add(-20 * time.Second)},
 			limit:  "global",
-			count:  2,
-		},
-		"count which is allowed returns nil": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(2).Obj()},
-			events: events{now.Add(-20 * time.Second)},
-			limit:  "global",
-			count:  1,
-		},
-		"non-positive count returns nil": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
-			events: events{now.Add(-50 * time.Second), now.Add(-10 * time.Second)},
-			limit:  "global",
-			count:  0,
 		},
 		"unknown limit returns nil": {
-			limits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(1).Obj()},
+			limits: []kueuealpha.PreemptionLimit{*globalOne},
+			events: events{now.Add(-20 * time.Second)},
 			limit:  "missing",
-			count:  1,
 		},
 	}
 
@@ -283,7 +221,10 @@ func TestPreemptionLimitsSnapshotNextSlotTime(t *testing.T) {
 				eventsByLimit = EventsByLimit{"global": {policy.GlobalScopeValue: tc.events}}
 			}
 			snapshot := SnapshotForTest(now, tc.limits, eventsByLimit)
-			if diff := gocmp.Diff(tc.want, snapshot.nextSlotTime(tc.limit, policy.GlobalScopeValue, tc.count)); diff != "" {
+			for _, ts := range tc.recorded {
+				snapshot.Record(ts, globalConsumed)
+			}
+			if diff := gocmp.Diff(tc.want, snapshot.nextSlotTime(tc.limit, policy.GlobalScopeValue)); diff != "" {
 				t.Errorf("nextSlotTime() (-want,+got):\n%s", diff)
 			}
 		})

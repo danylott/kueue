@@ -152,18 +152,9 @@ func TestPreemptionLimitBudgetTryConsume(t *testing.T) {
 		},
 		"taken preemptions alone reaching the limit return nil retry time": {
 			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(2).Obj()},
-			events:           EventsByLimit{"global": {policy.GlobalScopeValue: {now.Add(-30 * time.Second)}}},
 			taken:            preemptionCounts{"global": {policy.GlobalScopeValue: 2}},
 			wantOK:           false,
 			wantTaken:        preemptionCounts{"global": {policy.GlobalScopeValue: 2}},
-		},
-		"recorded and taken preemptions together wait for enough recorded events to expire": {
-			preemptionLimits: []kueuealpha.PreemptionLimit{*global.Clone().Limit(2).Obj()},
-			events:           EventsByLimit{"global": {policy.GlobalScopeValue: {now.Add(-40 * time.Second), now.Add(-10 * time.Second)}}},
-			taken:            preemptionCounts{"global": {policy.GlobalScopeValue: 1}},
-			wantOK:           false,
-			wantTaken:        preemptionCounts{"global": {policy.GlobalScopeValue: 1}},
-			wantRetryAt:      new(now.Add(50 * time.Second)),
 		},
 	}
 	for name, tc := range cases {

@@ -47,8 +47,8 @@ func (l *PreemptionLimiter) NewBudget() *PreemptionLimitBudget {
 // consumes, and returns those limits.
 //
 // If any limit has no budget left, it takes nothing and returns false with the
-// earliest time all exhausted limits have budget again, or nil if waiting alone
-// cannot free them.
+// earliest time all exhausted limits may have budget again, or nil if waiting
+// alone cannot free them.
 func (b *PreemptionLimitBudget) TryConsume(
 	preemptor, target *workload.Info,
 	preemptorCQ, targetCQ *schdcache.ClusterQueueSnapshot,
@@ -65,7 +65,7 @@ func (b *PreemptionLimitBudget) TryConsume(
 		if b.remaining(limit, consumed.ScopeValue) > 0 {
 			continue
 		}
-		slotTime := b.limiter.snapshot.nextSlotTime(limit, consumed.ScopeValue, b.taken[limit][consumed.ScopeValue]+1)
+		slotTime := b.limiter.snapshot.nextSlotTime(limit, consumed.ScopeValue)
 		if slotTime == nil {
 			b.limiter.log.V(5).Info("Skipping preemption candidate exceeding a PreemptionLimit",
 				"candidate", klog.KObj(target.Obj), "preemptionLimit", limit, "scopeValue", consumed.ScopeValue)
